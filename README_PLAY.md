@@ -1,0 +1,1 @@
+pip install poetry==1.8.4
