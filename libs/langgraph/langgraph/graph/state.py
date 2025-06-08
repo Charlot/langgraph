@@ -855,6 +855,7 @@ class StateGraph(Generic[StateT, InputT]):
                 **self.managed,
                 START: EphemeralValue(self.input),
             },
+            # @ws 输入channels
             input_channels=START,
             stream_mode="updates",
             output_channels=output_channels,
