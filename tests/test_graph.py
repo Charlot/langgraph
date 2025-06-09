@@ -12,7 +12,7 @@ def test_graph_build() -> None:
         hello_d: str
 
     def node_a(state: State) -> State:
-        return {"hello_a": "world_a"}
+        return {"hello_a": "world_a", "hello_a_1": "world_a_1"}
     
 
     def node_b(state: State) -> State:

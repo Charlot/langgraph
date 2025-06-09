@@ -341,6 +341,7 @@ class StateGraph(Generic[StateT, InputT]):
         """Add a new node to the state graph."""
         ...
 
+    # @ws graph 添加节点
     def add_node(
         self,
         node: str | StateNode[StateT],
@@ -511,6 +512,7 @@ class StateGraph(Generic[StateT, InputT]):
         )
         return self
 
+    # @ws graph 添加边
     def add_edge(self, start_key: str | list[str], end_key: str) -> Self:
         """Add a directed edge from the start node (or list of start nodes) to the end node.
 
@@ -565,6 +567,7 @@ class StateGraph(Generic[StateT, InputT]):
         self.waiting_edges.add((tuple(start_key), end_key))
         return self
 
+    # @ws graph 添加条件边-分支
     def add_conditional_edges(
         self,
         source: str,
@@ -749,6 +752,7 @@ class StateGraph(Generic[StateT, InputT]):
         self.compiled = True
         return self
 
+    # @ws graph 图编译
     @overload
     def compile(
         self: StateGraph[StateT, Unset],
