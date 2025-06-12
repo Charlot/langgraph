@@ -146,7 +146,7 @@ def DuplexStream(*streams: StreamProtocol) -> StreamProtocol:
 
     return StreamProtocol(__call__, {mode for s in streams for mode in s.modes})
 
-
+# @ws pregrel loop
 class PregelLoop:
     config: RunnableConfig
     store: BaseStore | None
@@ -454,6 +454,7 @@ class PregelLoop:
             # return the new task, to be started if not run before
             return pushed
 
+    # @ws pregrel 单次循环执行
     def tick(
         self,
         *,

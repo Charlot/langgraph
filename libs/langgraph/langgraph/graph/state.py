@@ -859,7 +859,7 @@ class StateGraph(Generic[StateT, InputT]):
                 **self.managed,
                 START: EphemeralValue(self.input),
             },
-            # @ws 输入channels
+            # @ws graph 输入channels
             input_channels=START,
             stream_mode="updates",
             output_channels=output_channels,
@@ -1103,6 +1103,7 @@ class CompiledStateGraph(Pregel[InputT], Generic[StateT, InputT]):
             reader = None
 
         # attach branch publisher
+        # @ws compiled 分支是一个是个特殊的writer
         self.nodes[start].writers.append(branch.run(get_writes, reader))
 
     def _migrate_checkpoint(self, checkpoint: Checkpoint) -> None:

@@ -95,7 +95,7 @@ class ChannelRead(RunnableCallable):
 
 DEFAULT_BOUND = RunnableCallable(lambda input: input)
 
-
+# @ws pregrel node class
 class PregelNode(Runnable):
     """A node in a Pregel graph. This won't be invoked as a runnable by the graph
     itself, but instead acts as a container for the components necessary to make

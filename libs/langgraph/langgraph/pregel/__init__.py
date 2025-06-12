@@ -2279,6 +2279,7 @@ class Pregel(PregelProtocol[InputT], Generic[InputT]):
             cache,
         )
 
+    # @ws pregrel 流式调用，单次输入
     def stream(
         self,
         input: InputT,
@@ -2470,6 +2471,7 @@ class Pregel(PregelProtocol[InputT], Generic[InputT]):
                 # Channel updates from step N are only visible in step N+1
                 # channels are guaranteed to be immutable for the duration of the step,
                 # with channel updates applied only at the transition between steps.
+                # @ws !运行入口
                 while loop.tick(input_keys=self.input_channels):
                     for task in loop.match_cached_writes():
                         loop.output_writes(task.id, task.writes, cached=True)
@@ -2736,6 +2738,7 @@ class Pregel(PregelProtocol[InputT], Generic[InputT]):
             await asyncio.shield(run_manager.on_chain_error(e))
             raise
 
+    # @ws pregrel 同步运行
     def invoke(
         self,
         input: InputT,

@@ -112,7 +112,7 @@ class FuturesDict(Generic[F, E], dict[F, Optional[PregelExecutableTask]]):
                 if self.counter == 0 or _should_stop_others(self.done):
                     self.event.set()
 
-
+# @ws pregrel runner 同步运行pregrel task
 class PregelRunner:
     """Responsible for executing a set of Pregel tasks concurrently, committing
     their writes, yielding control to caller when there is output to emit, and

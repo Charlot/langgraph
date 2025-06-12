@@ -3,7 +3,7 @@ import pytest
 from langgraph.graph import StateGraph
 from langgraph.errors import InvalidUpdateError
 from IPython.display import display, Image
-
+import operator
 def test_graph_build() -> None:
     class State(TypedDict):
         hello_a: str
@@ -38,6 +38,7 @@ def test_graph_build() -> None:
     builder.add_edge("a", "c")
     builder.add_conditional_edges("a", node_d_route_fun, {True: "d", False: "__end__"} )
     graph = builder.compile()
+    graph.nodes["a"].node
 
     # display(Image(graph.get_graph().draw_mermaid_png()))
     # print(graph.get_graph().draw_ascii())
