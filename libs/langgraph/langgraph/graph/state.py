@@ -1034,6 +1034,7 @@ class CompiledStateGraph(Pregel[InputT], Generic[StateT, InputT]):
         if isinstance(starts, str):
             # subscribe to start channel
             if end != END:
+                # @ws compiled add writers
                 self.nodes[starts].writers.append(
                     ChannelWrite(
                         (ChannelWriteEntry(CHANNEL_BRANCH_TO.format(end), None),)
