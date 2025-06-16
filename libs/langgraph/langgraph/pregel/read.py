@@ -202,6 +202,7 @@ class PregelNode(Runnable):
             writers.pop()
         return writers
 
+    # @ws pregrel node 只读属性
     @cached_property
     def node(self) -> Runnable[Any, Any] | None:
         """Get a runnable that combines `bound` and `writers`."""
