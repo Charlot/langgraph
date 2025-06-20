@@ -1,3 +1,5 @@
+-e ./libs/langgraph[test]
+
 python-dotenv
 grandalf
 langchain_openai
