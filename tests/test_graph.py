@@ -4,29 +4,31 @@ from langgraph.graph import StateGraph
 from langgraph.errors import InvalidUpdateError
 from IPython.display import display, Image
 import operator
-def test_graph_build() -> None:
-    class State(TypedDict):
+
+class State(TypedDict):
         hello_a: str
         hello_b: str
         hello_c: str
         hello_d: str
 
-    def node_a(state: State) -> State:
-        return {"hello_a": "world_a", "hello_a_1": "world_a_1"}
-    
+def node_a(state: State) -> State:
+    return {"hello_a": "world_a", "hello_a_1": "world_a_1"}
 
-    def node_b(state: State) -> State:
-        return {"hello_b": "world_c"}
-    
-    def node_c(state: State) -> State:
-        return {"hello_c": "world_c",
-                "hello_a": "world_c_a"}
-    
-    def node_d(state: State) -> State:
-        return {"hello_d": "world_d"}
 
-    def node_d_route_fun(state: State)->bool:
-        return True
+def node_b(state: State) -> State:
+    return {"hello_b": "world_c"}
+
+def node_c(state: State) -> State:
+    return {"hello_c": "world_c",
+            "hello_a": "world_c_a"}
+
+def node_d(state: State) -> State:
+    return {"hello_d": "world_d"}
+
+def node_d_route_fun(state: State)->bool:
+    return True
+def test_graph_build() -> None:
+    
 
     builder = StateGraph(State)
     builder.add_node("a", node_a)
