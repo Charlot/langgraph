@@ -5,6 +5,10 @@ from langgraph.errors import InvalidUpdateError
 from IPython.display import display, Image
 import operator
 
+class SimpleState(TypedDict):
+    hello_a: str
+    hello_b: str
+
 class State(TypedDict):
     hello_a: str
     hello_b: str
@@ -12,6 +16,7 @@ class State(TypedDict):
     hello_d: str
     hello_e: str
     hello_f: str
+    
 
 def node_a(state: State) -> State:
     print("----> node a is called")
@@ -22,7 +27,7 @@ def node_a(state: State) -> State:
 def node_b(state: State) -> State:
     print("----> node b is called")
 
-    return {"hello_b": "world_c"}
+    return {"hello_b": "world_b"}
 
 def node_c(state: State) -> State:
     print("----> node c is called")
@@ -49,6 +54,24 @@ def node_f(state: State) -> State:
 
 def node_d_route_fun(state: State)->bool:
     return True
+
+
+def teset_simple_graph_build():
+    builder = StateGraph(State)
+    builder.add_node("a", node_a)
+    builder.add_node("b", node_b)
+    builder.set_entry_point("a")
+    builder.add_edge("a", "b")
+    builder.set_finish_point("b")
+
+    graph = builder.compile()
+
+    # print(graph.get_graph().draw_ascii())
+
+    result = graph.invoke(input={"hello_a": "there"})
+    print("result:----->", result)
+
+
 def test_graph_build() -> None:
     
 
@@ -75,7 +98,7 @@ def test_graph_build() -> None:
     graph.nodes["a"].node
 
     # display(Image(graph.get_graph().draw_mermaid_png()))
-    print(graph.get_graph().draw_ascii())
+    # print(graph.get_graph().draw_ascii())
 #                 +-----------+                  
 #                 | __start__ |                  
 #                 +-----------+                  
@@ -118,9 +141,10 @@ def test_graph_build() -> None:
 # ----> node f is called
 # ----> node f is called
 
-    result = graph.invoke({"helloa": "there"})
+    result = graph.invoke(input={"hello_a": "there"})
     print("result:----->", result)
 
 
+
 if __name__ == "__main__":
-    test_graph_build()
+    teset_simple_graph_build()

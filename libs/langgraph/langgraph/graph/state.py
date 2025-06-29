@@ -1041,6 +1041,7 @@ class CompiledStateGraph(Pregel[InputT], Generic[StateT, InputT]):
                     )
                 )
         elif end != END:
+            # @ws 等待边，多个入
             channel_name = f"join:{'+'.join(starts)}:{end}"
             # register channel
             if self.builder.nodes[end].defer:
