@@ -936,6 +936,7 @@ class CompiledStateGraph(Pregel[InputT], Generic[StateT, InputT]):
                 k for k, v in self.builder.managed.items()
             ]
 
+        # @ws write: 用来获取更新的方法
         def _get_updates(
             input: None | dict | Any,
         ) -> Sequence[tuple[str, Any]] | None:

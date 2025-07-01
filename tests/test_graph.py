@@ -1,6 +1,6 @@
 from typing import TypedDict,Annotated
 import pytest
-from langgraph.graph import StateGraph
+from langgraph.graph import StateGraph,START,END
 from langgraph.errors import InvalidUpdateError
 from IPython.display import display, Image
 import operator
@@ -33,7 +33,7 @@ def node_c(state: State) -> State:
     print("----> node c is called")
 
     return {"hello_c": "world_c",
-            "hello_a": "world_c_a"}
+            "hello_c_a": "world_c_a"}
 
 def node_d(state: State) -> State:    
     print("----> node d is called")
@@ -56,7 +56,7 @@ def node_d_route_fun(state: State)->bool:
     return True
 
 
-def teset_simple_graph_build():
+def test_simple_graph_build():
     builder = StateGraph(State)
     builder.add_node("a", node_a)
     builder.add_node("b", node_b)
@@ -145,6 +145,29 @@ def test_graph_build() -> None:
     print("result:----->", result)
 
 
+def test_parallel_graph_build():
+    builder = StateGraph(State)
+    builder.add_node("a", node_a)
+    builder.add_node("b", node_b)
+    builder.add_node("c", node_c)
+    builder.add_node("d", node_d)
+
+    builder.add_edge(START, "a")
+
+    builder.add_edge("a", "b")
+    builder.add_edge("a", "c")
+
+    # builder.add_edge("a","d")
+    # builder.add_edge("b","d")
+    # builder.add_edge("c","d")
+
+    builder.add_edge(["a", "b", "c"], "d")
+    builder.set_finish_point("d")
+
+    graph = builder.compile()
+    print(graph.get_graph().draw_ascii())
+    result = graph.invoke(input={"hello_a": "there"})
+    print("result:----->", result)
 
 if __name__ == "__main__":
-    teset_simple_graph_build()
+    test_parallel_graph_build()
