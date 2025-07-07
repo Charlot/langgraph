@@ -19,36 +19,37 @@ class State(TypedDict):
     
 
 def node_a(state: State) -> State:
-    print("----> node a is called")
+    print(f"----> node a is called: {state}")
 
     return {"hello_a": "world_a", "hello_a_1": "world_a_1"}
 
 
 def node_b(state: State) -> State:
-    print("----> node b is called")
+
+    print(f"----> node b is called: {state}")
 
     return {"hello_b": "world_b"}
 
 def node_c(state: State) -> State:
-    print("----> node c is called")
+    print(f"----> node c is called: {state}")
 
     return {"hello_c": "world_c",
             "hello_c_a": "world_c_a"}
 
 def node_d(state: State) -> State:    
-    print("----> node d is called")
+    print(f"----> node d is called: {state}")
 
     return {"hello_d": "world_d"}
 
 
 def node_e(state: State) -> State:  
-    print("----> node e is called")
+    print(f"----> node e is called: {state}")
 
     return {"hello_e": "world_e"}
 
 
 def node_f(state: State) -> State:
-    print("----> node f is called")
+    print(f"----> node f is called: {state}")
 
     return {"hello_f": "world_f"}
 
