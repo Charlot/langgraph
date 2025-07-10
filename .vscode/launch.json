@@ -5,7 +5,7 @@
             "name": "Test Graph",
             "type":"debugpy",
             "request":"launch",
-            "program": "${workspaceFolder}/tests/test_graph.py",
+            "program": "${workspaceFolder}/tests/test_langgraph_defer.py",
             "console":"integratedTerminal",
             "cwd":"${workspaceFolder}",
             "justMyCode": false
