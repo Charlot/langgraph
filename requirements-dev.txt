@@ -2,3 +2,4 @@
 python-dotenv
 grandalf
 langchain_openai
+ipython
