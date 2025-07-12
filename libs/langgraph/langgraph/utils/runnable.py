@@ -374,6 +374,7 @@ class RunnableCallable(Runnable):
             else:
                 run_manager.on_chain_end(ret)
         else:
+            # @ws !节点运行-执行方法
             ret = self.func(*args, **kwargs)
         if self.recurse and isinstance(ret, Runnable):
             return ret.invoke(input, config)

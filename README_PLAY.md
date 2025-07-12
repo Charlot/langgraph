@@ -13,7 +13,7 @@
 source .venv/bin/activate
 
 uv pip install -r requirements-dev.txt
-uv pip install --group libs/langgraph/pyproject.toml:dev
+uv pip install -e libs/langgraph
 
 
 #uv sync --active --inexact 

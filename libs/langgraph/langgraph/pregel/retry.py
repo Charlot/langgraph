@@ -39,6 +39,7 @@ def run_with_retry(
             # clear any writes from previous attempts
             task.writes.clear()
             # run the task
+            # @ws !节点运行-任务-runnable
             return task.proc.invoke(task.input, config)
         except ParentCommand as exc:
             ns: str = config[CONF][CONFIG_KEY_CHECKPOINT_NS]

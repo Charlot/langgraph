@@ -5,10 +5,11 @@
             "name": "Test Graph",
             "type":"debugpy",
             "request":"launch",
-            "program": "${workspaceFolder}/tests/test_langgraph_defer.py",
+            "program": "${workspaceFolder}/libs/langgraph/tests/play/test_langgraph_defer.py",
             "console":"integratedTerminal",
             "cwd":"${workspaceFolder}",
-            "justMyCode": false
+            "justMyCode": false,
+            
         }
     ]
 }
