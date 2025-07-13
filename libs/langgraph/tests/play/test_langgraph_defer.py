@@ -16,6 +16,9 @@ class State(TypedDict):
     hello_d: str
     hello_e: str
     hello_f: str
+    hello_g: str
+    hello_h: str
+    hello_i: str
 
 def node_a(state: State) -> State:
     print("node_a")
