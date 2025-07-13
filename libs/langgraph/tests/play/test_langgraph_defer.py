@@ -1,10 +1,12 @@
-import time
-from typing import TypedDict
-from langgraph.graph import StateGraph
-from functools import wraps
-from datetime import datetime
 import asyncio
+from datetime import datetime
+from functools import wraps
+from io import BytesIO
+from typing import TypedDict
 
+from IPython.display import Image, display
+
+from langgraph.graph import StateGraph
 
 
 class State(TypedDict):
@@ -47,32 +49,79 @@ def node_g(state: State) -> State:
     print("node_g")
     return {"hello_g": "hello_g"}
 
-def test_defer():
+def node_h(state: State) -> State:
+    print("node_h")
+    return {"hello_h": "hello_h"}
+
+def node_i(state: State) -> State:
+    print("node_i")
+    return {"hello_i": "hello_i"}
+
+def test_error_defer():
     builder = StateGraph(State)
     builder.add_node("a", node_a)
     builder.add_node("b", node_b)
-    builder.add_node("c", node_c)
+    builder.add_node("c", node_c, defer=True)
     builder.add_node("d", node_d, defer=True)
-    builder.add_node("f", node_f, defer=True)
 
     builder.set_entry_point("a")
 
     builder.add_edge("a", "b")
     builder.add_edge("a", "c")
     builder.add_edge("a", "d")
-    builder.add_edge("a", "f")
-    builder.add_edge("b", "f")
-    builder.add_edge("c", "f")
-    builder.add_edge("d", "f")
+    builder.add_edge("b", "d")
+    builder.add_edge("c", "d")
 
-    builder.set_finish_point("f")
+    builder.set_finish_point("d")
 
 
     graph = builder.compile()
 
-    # display(Image(graph.get_graph().draw_mermaid_png()))
+    # display_graph(graph)
     # print(graph.get_graph().draw_ascii())
     graph.invoke(input={})
+
+
+def test_multi_error_defer():
+    builder = StateGraph(State)
+    builder.add_node("a", node_a)
+    builder.add_node("b", node_b)
+    builder.add_node("c", node_c)
+    builder.add_node("d", node_d)
+    builder.add_node("e", node_e)
+
+    builder.add_node("f", node_f, defer=True)
+    builder.add_node("g", node_g, defer=True)
+    builder.add_node("h", node_h, defer=True)
+
+    builder.add_edge("a", "b")
+    builder.add_edge("a", "c")
+    builder.add_edge("a", "d")
+    builder.add_edge("a", "e")
+
+    builder.add_edge("b", "f")
+    builder.add_edge("c", "f")
+
+    builder.add_edge("d", "g")
+    builder.add_edge("e", "g")
+
+    builder.add_edge("d", "h")
+    builder.add_edge("f", "h")
+    builder.add_edge("g", "h")
+
+    builder.set_entry_point("a")
+    builder.set_finish_point("h")
+
+    graph = builder.compile()
+
+    # display_graph(graph=graph)
+    # display(Image(graph.get_graph().draw_mermaid_png()))
+    # print(graph.get_graph().draw_ascii())
+
+    graph.invoke(input={})
+    
+    
+
 
 
 
@@ -94,7 +143,7 @@ def test_graph_build(defer=False) -> None:
 
     graph = builder.compile()
 
-    # display(Image(graph.get_graph().draw_mermaid_png()))
+    display(Image(graph.get_graph().draw_mermaid_png()))
     # print(graph.get_graph().draw_ascii())
     graph.invoke(input={})
 
@@ -125,6 +174,20 @@ def test_multi_defer():
     # print(graph.get_graph().draw_ascii())
     graph.invoke(input={})
 
+def display_graph(graph) -> None:
+    """Display graph"""
+
+    import matplotlib.image as mpimg
+    import matplotlib.pyplot as plt
+    png_data = graph.get_graph().draw_mermaid_png()
+    if png_data:
+        img = mpimg.imread(BytesIO(png_data), format='png')
+        plt.imshow(img)
+        plt.axis('off')
+        plt.show()
+
+
+    
 
 if __name__ == "__main__":
-    test_defer()
+    test_multi_error_defer()
