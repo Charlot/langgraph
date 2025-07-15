@@ -79,6 +79,24 @@ def test_join_edge():
 
     graph.invoke({})
 
+def test_join_edge_defer():
+    buider = StateGraph(State)
+    buider.add_node("a", node_a)
+    buider.add_node("b", node_b)
+    buider.add_node("c", node_c, defer=True)
+
+    buider.add_edge(["a", "b"], "c")
+    buider.set_entry_point("a")
+    buider.set_entry_point("b")
+
+    buider.set_finish_point("c")
+
+    graph = buider.compile()
+
+    # print(graph.get_graph().draw_ascii())
+
+    graph.invoke({})
+
 
 if __name__ == "__main__":
-    test_join_edge()
+    test_join_edge_defer()

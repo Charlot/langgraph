@@ -29,6 +29,10 @@ def node_a(state: State) -> State:
     print("node_a")
     return {"hello_a": "hello_a"}
 
+def route_fun_single_node(state: State)->Any:
+    print("route_fun_single_node")
+    return "b","c"
+
 def route_fun_a_multi_nodes(state: State)->Any:
     print("route_fun_a_multi_nodes")
     return "1","2"
@@ -94,8 +98,21 @@ def route_fun_a_2(state: State)->bool:
     print("route_fun_a_2")
     return 2
 
-def test_conditional_edge() -> None:
-    builder=StateGraph(State)
+
+def test_conditional_edge_single() -> None:
+    builder = StateGraph(State)
+    builder.add_node("a",node_a)
+    builder.add_node("b",node_b)
+    builder.add_node("c",node_c)
+
+    builder.add_conditional_edges("a",route_fun_single_node)
+    builder.set_entry_point("a")
+
+    graph = builder.compile()
+    graph.invoke(input={})
+
+def test_conditional_edge_multi() -> None:
+    builder = StateGraph(State)
     builder.add_node("a",node_a)
     builder.add_node("b",node_b)
     builder.add_node("c",node_c)
@@ -388,11 +405,13 @@ def test_conditional_edge_defer() -> None:
 
 
 if __name__ == "__main__":
+    test_conditional_edge_single()
     # test_conditional_edge()
     # test_conditional_edge_branch_merge()
     # test_conditional_edge_branch_fork()
     # test_conditional_edge_branch_multi_branchs()
-    test_conditional_edge_defer()
+    # test_conditional_edge_defer()
+
 
 
 

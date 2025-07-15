@@ -5,7 +5,7 @@
             "name": "Test Graph",
             "type":"debugpy",
             "request":"launch",
-            "program": "${workspaceFolder}/libs/langgraph/tests/play/test_langgraph_join_edge.py",
+            "program": "${workspaceFolder}/libs/langgraph/tests/play/test_langgraph_conditional_edge.py",
             "console":"integratedTerminal",
             "cwd":"${workspaceFolder}",
             "justMyCode": false,
