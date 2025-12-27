@@ -3,8 +3,9 @@ from typing import Annotated
 
 from typing_extensions import TypedDict
 
-from langgraph.constants import END, START, Send
+from langgraph.constants import END, START
 from langgraph.graph.state import StateGraph
+from langgraph.types import Send
 
 
 def fanout_to_subgraph() -> StateGraph:
@@ -37,7 +38,7 @@ def fanout_to_subgraph() -> StateGraph:
         return END if state["jokes"][0].endswith(" a" * 10) else "bump"
 
     # subgraph
-    subgraph = StateGraph(JokeState, input=JokeInput, output=JokeOutput)
+    subgraph = StateGraph(JokeState, input_schema=JokeInput, output_schema=JokeOutput)
     subgraph.add_node("edit", edit)
     subgraph.add_node("generate", generate)
     subgraph.add_node("bump", bump)
@@ -87,7 +88,7 @@ def fanout_to_subgraph_sync() -> StateGraph:
         return END if state["jokes"][0].endswith(" a" * 10) else "bump"
 
     # subgraph
-    subgraph = StateGraph(JokeState, input=JokeInput, output=JokeOutput)
+    subgraph = StateGraph(JokeState, input_schema=JokeInput, output_schema=JokeOutput)
     subgraph.add_node("edit", edit)
     subgraph.add_node("generate", generate)
     subgraph.add_node("bump", bump)
@@ -113,10 +114,9 @@ if __name__ == "__main__":
     import time
 
     import uvloop
+    from langgraph.checkpoint.memory import InMemorySaver
 
-    from langgraph.checkpoint.memory import MemorySaver
-
-    graph = fanout_to_subgraph().compile(checkpointer=MemorySaver())
+    graph = fanout_to_subgraph().compile(checkpointer=InMemorySaver())
     input = {
         "subjects": [
             random.choices("abcdefghijklmnopqrstuvwxyz", k=1000) for _ in range(1000)

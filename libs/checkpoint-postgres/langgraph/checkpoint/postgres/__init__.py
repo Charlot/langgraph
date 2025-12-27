@@ -7,11 +7,6 @@ from contextlib import contextmanager
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
-from psycopg import Capabilities, Connection, Cursor, Pipeline
-from psycopg.rows import DictRow, dict_row
-from psycopg.types.json import Jsonb
-from psycopg_pool import ConnectionPool
-
 from langgraph.checkpoint.base import (
     WRITES_IDX_MAP,
     ChannelVersions,
@@ -19,11 +14,17 @@ from langgraph.checkpoint.base import (
     CheckpointMetadata,
     CheckpointTuple,
     get_checkpoint_id,
-    get_checkpoint_metadata,
+    get_serializable_checkpoint_metadata,
 )
+from langgraph.checkpoint.serde.base import SerializerProtocol
+from psycopg import Capabilities, Connection, Cursor, Pipeline
+from psycopg.rows import DictRow, dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
+
 from langgraph.checkpoint.postgres import _internal
 from langgraph.checkpoint.postgres.base import BasePostgresSaver
-from langgraph.checkpoint.serde.base import SerializerProtocol
+from langgraph.checkpoint.postgres.shallow import ShallowPostgresSaver
 
 Conn = _internal.Conn  # For backward compatibility
 
@@ -93,9 +94,10 @@ class PostgresSaver(BasePostgresSaver):
             for v, migration in zip(
                 range(version + 1, len(self.MIGRATIONS)),
                 self.MIGRATIONS[version + 1 :],
+                strict=False,
             ):
                 cur.execute(migration)
-                cur.execute(f"INSERT INTO checkpoint_migrations (v) VALUES ({v})")
+                cur.execute("INSERT INTO checkpoint_migrations (v) VALUES (%s)", (v,))
         if self.pipe:
             self.pipe.sync()
 
@@ -114,12 +116,12 @@ class PostgresSaver(BasePostgresSaver):
 
         Args:
             config: The config to use for listing the checkpoints.
-            filter: Additional filtering criteria for metadata. Defaults to None.
-            before: If provided, only checkpoints before the specified checkpoint ID are returned. Defaults to None.
-            limit: The maximum number of checkpoints to return. Defaults to None.
+            filter: Additional filtering criteria for metadata.
+            before: If provided, only checkpoints before the specified checkpoint ID are returned.
+            limit: The maximum number of checkpoints to return.
 
         Yields:
-            Iterator[CheckpointTuple]: An iterator of checkpoint tuples.
+            An iterator of checkpoint tuples.
 
         Examples:
             >>> from langgraph.checkpoint.postgres import PostgresSaver
@@ -141,11 +143,13 @@ class PostgresSaver(BasePostgresSaver):
         """
         where, args = self._search_where(config, filter, before)
         query = self.SELECT_SQL + where + " ORDER BY checkpoint_id DESC"
-        if limit:
-            query += f" LIMIT {limit}"
+        params = list(args)
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(int(limit))
         # if we change this to use .stream() we need to make sure to close the cursor
         with self._cursor() as cur:
-            cur.execute(query, args)
+            cur.execute(query, params)
             values = cur.fetchall()
             if not values:
                 return
@@ -175,38 +179,13 @@ class PostgresSaver(BasePostgresSaver):
                             value["channel_values"],
                         )
             for value in values:
-                yield CheckpointTuple(
-                    {
-                        "configurable": {
-                            "thread_id": value["thread_id"],
-                            "checkpoint_ns": value["checkpoint_ns"],
-                            "checkpoint_id": value["checkpoint_id"],
-                        }
-                    },
-                    {
-                        **value["checkpoint"],
-                        "channel_values": self._load_blobs(value["channel_values"]),
-                    },
-                    value["metadata"],
-                    (
-                        {
-                            "configurable": {
-                                "thread_id": value["thread_id"],
-                                "checkpoint_ns": value["checkpoint_ns"],
-                                "checkpoint_id": value["parent_checkpoint_id"],
-                            }
-                        }
-                        if value["parent_checkpoint_id"]
-                        else None
-                    ),
-                    self._load_writes(value["pending_writes"]),
-                )
+                yield self._load_checkpoint_tuple(value)
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Get a checkpoint tuple from the database.
 
         This method retrieves a checkpoint tuple from the Postgres database based on the
-        provided config. If the config contains a "checkpoint_id" key, the checkpoint with
+        provided config. If the config contains a `checkpoint_id` key, the checkpoint with
         the matching thread ID and timestamp is retrieved. Otherwise, the latest checkpoint
         for the given thread ID is retrieved.
 
@@ -214,7 +193,7 @@ class PostgresSaver(BasePostgresSaver):
             config: The config to use for retrieving the checkpoint.
 
         Returns:
-            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+            The retrieved checkpoint tuple, or None if no matching checkpoint was found.
 
         Examples:
 
@@ -271,32 +250,7 @@ class PostgresSaver(BasePostgresSaver):
                         value["channel_values"],
                     )
 
-            return CheckpointTuple(
-                {
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "checkpoint_ns": checkpoint_ns,
-                        "checkpoint_id": value["checkpoint_id"],
-                    }
-                },
-                {
-                    **value["checkpoint"],
-                    "channel_values": self._load_blobs(value["channel_values"]),
-                },
-                value["metadata"],
-                (
-                    {
-                        "configurable": {
-                            "thread_id": thread_id,
-                            "checkpoint_ns": checkpoint_ns,
-                            "checkpoint_id": value["parent_checkpoint_id"],
-                        }
-                    }
-                    if value["parent_checkpoint_id"]
-                    else None
-                ),
-                self._load_writes(value["pending_writes"]),
-            )
+            return self._load_checkpoint_tuple(value)
 
     def put(
         self,
@@ -333,11 +287,9 @@ class PostgresSaver(BasePostgresSaver):
         configurable = config["configurable"].copy()
         thread_id = configurable.pop("thread_id")
         checkpoint_ns = configurable.pop("checkpoint_ns")
-        checkpoint_id = configurable.pop(
-            "checkpoint_id", configurable.pop("thread_ts", None)
-        )
-
+        checkpoint_id = configurable.pop("checkpoint_id", None)
         copy = checkpoint.copy()
+        copy["channel_values"] = copy["channel_values"].copy()
         next_config = {
             "configurable": {
                 "thread_id": thread_id,
@@ -346,16 +298,28 @@ class PostgresSaver(BasePostgresSaver):
             }
         }
 
+        # inline primitive values in checkpoint table
+        # others are stored in blobs table
+        blob_values = {}
+        for k, v in checkpoint["channel_values"].items():
+            if v is None or isinstance(v, (str, int, float, bool)):
+                pass
+            else:
+                blob_values[k] = copy["channel_values"].pop(k)
+
         with self._cursor(pipeline=True) as cur:
-            cur.executemany(
-                self.UPSERT_CHECKPOINT_BLOBS_SQL,
-                self._dump_blobs(
-                    thread_id,
-                    checkpoint_ns,
-                    copy.pop("channel_values"),  # type: ignore[misc]
-                    new_versions,
-                ),
-            )
+            if blob_versions := {
+                k: v for k, v in new_versions.items() if k in blob_values
+            }:
+                cur.executemany(
+                    self.UPSERT_CHECKPOINT_BLOBS_SQL,
+                    self._dump_blobs(
+                        thread_id,
+                        checkpoint_ns,
+                        blob_values,
+                        blob_versions,
+                    ),
+                )
             cur.execute(
                 self.UPSERT_CHECKPOINTS_SQL,
                 (
@@ -364,7 +328,7 @@ class PostgresSaver(BasePostgresSaver):
                     checkpoint["id"],
                     checkpoint_id,
                     Jsonb(copy),
-                    Jsonb(get_checkpoint_metadata(config, metadata)),
+                    Jsonb(get_serializable_checkpoint_metadata(config, metadata)),
                 ),
             )
         return next_config
@@ -466,5 +430,47 @@ class PostgresSaver(BasePostgresSaver):
                 with conn.cursor(binary=True, row_factory=dict_row) as cur:
                     yield cur
 
+    def _load_checkpoint_tuple(self, value: DictRow) -> CheckpointTuple:
+        """
+        Convert a database row into a CheckpointTuple object.
 
-__all__ = ["PostgresSaver", "BasePostgresSaver", "Conn"]
+        Args:
+            value: A row from the database containing checkpoint data.
+
+        Returns:
+            CheckpointTuple: A structured representation of the checkpoint,
+            including its configuration, metadata, parent checkpoint (if any),
+            and pending writes.
+        """
+        return CheckpointTuple(
+            {
+                "configurable": {
+                    "thread_id": value["thread_id"],
+                    "checkpoint_ns": value["checkpoint_ns"],
+                    "checkpoint_id": value["checkpoint_id"],
+                }
+            },
+            {
+                **value["checkpoint"],
+                "channel_values": {
+                    **(value["checkpoint"].get("channel_values") or {}),
+                    **self._load_blobs(value["channel_values"]),
+                },
+            },
+            value["metadata"],
+            (
+                {
+                    "configurable": {
+                        "thread_id": value["thread_id"],
+                        "checkpoint_ns": value["checkpoint_ns"],
+                        "checkpoint_id": value["parent_checkpoint_id"],
+                    }
+                }
+                if value["parent_checkpoint_id"]
+                else None
+            ),
+            self._load_writes(value["pending_writes"]),
+        )
+
+
+__all__ = ["PostgresSaver", "BasePostgresSaver", "ShallowPostgresSaver", "Conn"]

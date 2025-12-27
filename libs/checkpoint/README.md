@@ -36,20 +36,22 @@ Each checkpointer should conform to `langgraph.checkpoint.base.BaseCheckpointSav
 
 - `.put` - Store a checkpoint with its configuration and metadata.
 - `.put_writes` - Store intermediate writes linked to a checkpoint (i.e. pending writes).
-- `.get_tuple` - Fetch a checkpoint tuple using for a given configuration (`thread_id` and `thread_ts`).
+- `.get_tuple` - Fetch a checkpoint tuple using for a given configuration (`thread_id` and `checkpoint_id`).
 - `.list` - List checkpoints that match a given configuration and filter criteria.
+- `.delete_thread()` - Delete all checkpoints and writes associated with a thread.
+- `.get_next_version()` - Generate the next version ID for a channel.
 
-If the checkpointer will be used with asynchronous graph execution (i.e. executing the graph via `.ainvoke`, `.astream`, `.abatch`), checkpointer must implement asynchronous versions of the above methods (`.aput`, `.aput_writes`, `.aget_tuple`, `.alist`).
+If the checkpointer will be used with asynchronous graph execution (i.e. executing the graph via `.ainvoke`, `.astream`, `.abatch`), checkpointer must implement asynchronous versions of the above methods (`.aput`, `.aput_writes`, `.aget_tuple`, `.alist`). Similarly, the checkpointer must implement `.adelete_thread()` if asynchronous thread cleanup is desired. The base class provides a default implementation of `.get_next_version()` that generates an integer sequence starting from 1, but this method should be overridden for custom versioning schemes.
 
 ## Usage
 
 ```python
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import InMemorySaver
 
 write_config = {"configurable": {"thread_id": "1", "checkpoint_ns": ""}}
 read_config = {"configurable": {"thread_id": "1"}}
 
-checkpointer = MemorySaver()
+checkpointer = InMemorySaver()
 checkpoint = {
     "v": 4,
     "ts": "2024-07-31T20:14:19.804150+00:00",

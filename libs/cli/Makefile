@@ -1,11 +1,12 @@
-.PHONY: test lint format test-integration update-schema
+.PHONY: test lint format test-integration update-schema bump-version
 
 ######################
 # TESTING AND COVERAGE
 ######################
 
+TEST?= "tests/unit_tests"
 test:
-	uv run pytest tests/unit_tests
+	uv run pytest $(TEST)
 test-integration:
 	uv run pytest tests/integration_tests
 
@@ -34,3 +35,6 @@ format format_diff:
 
 update-schema:
 	uv run python generate_schema.py
+
+bump-version:
+	uv run hatch version patch

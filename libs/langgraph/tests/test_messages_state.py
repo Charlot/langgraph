@@ -14,12 +14,16 @@ from langchain_core.messages import (
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+from langgraph.constants import END, START
 from langgraph.graph import add_messages
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, MessagesState, push_message
-from langgraph.graph.state import END, START, StateGraph
+from langgraph.graph.state import StateGraph
 from tests.messages import _AnyIdHumanMessage
 
-_, CORE_MINOR, CORE_PATCH = (int(v) for v in langchain_core.__version__.split("."))
+_, CORE_MINOR, CORE_PATCH = (
+    int("".join(c for c in v if c.isdigit()))
+    for v in langchain_core.__version__.split(".")
+)
 
 
 def test_add_single_message():

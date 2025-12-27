@@ -8,6 +8,9 @@ on:
         type: string
         description: "From which folder this pipeline executes"
 
+permissions:
+  contents: read
+
 env:
   # This env var allows us to get inline annotations when ruff has complaints.
   RUFF_OUTPUT_FORMAT: github
@@ -28,7 +31,7 @@ jobs:
           - "3.12"
     name: "lint #${{ matrix.python-version }}"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Get changed files
         id: changed-files
         uses: Ana06/get-changed-files@v2.3.0
@@ -36,7 +39,7 @@ jobs:
           filter: "${{ inputs.working-directory }}/**"
       - name: Set up Python ${{ matrix.python-version }}
         if: steps.changed-files.outputs.all
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
@@ -45,7 +48,7 @@ jobs:
       - name: Install dependencies
         if: steps.changed-files.outputs.all
         working-directory: ${{ inputs.working-directory }}
-        run: uv sync --frozen --group dev
+        run: uv sync --frozen --group lint
 
       - name: Get .mypy_cache to speed up mypy
         if: steps.changed-files.outputs.all
@@ -71,7 +74,7 @@ jobs:
       - name: Install test dependencies
         if: steps.changed-files.outputs.all
         working-directory: ${{ inputs.working-directory }}
-        run: uv sync --group dev
+        run: uv sync --group lint
 
       - name: Get .mypy_cache_test to speed up mypy
         if: steps.changed-files.outputs.all

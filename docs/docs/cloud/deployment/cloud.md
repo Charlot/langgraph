@@ -62,6 +62,15 @@ Starting from the `LangGraph Platform` view...
 1. In the panel, select the `Server` tab to view server logs for the revision. Server logs are only available after a revision has been deployed.
 1. Within the `Server` tab, adjust the date/time range picker as needed. By default, the date/time range picker is set to the `Last 7 days`.
 
+## View Deployment Metrics
+
+Starting from the <a href="https://smith.langchain.com/" target="_blank">LangSmith UI</a>...
+
+1. In the left-hand navigation panel, select `LangGraph Platform`. The `LangGraph Platform` view contains a list of existing LangGraph Platform deployments.
+1. Select an existing deployment to monitor.
+1. Select the `Monitoring` tab to view the deployment metrics. See a list of [all available metrics](../../concepts/langgraph_control_plane.md#monitoring).
+1. Within the `Monitoring` tab, use the date/time range picker as needed. By default, the date/time range picker is set to the `Last 15 minutes`.
+
 ## Interrupt Revision
 
 Interrupting a revision will stop deployment of the revision.
@@ -90,8 +99,8 @@ Starting from the `LangGraph Platform` view...
 1. In the top-right corner, select the gear icon (`Deployment Settings`).
 1. Update the `Git Branch` to the desired branch.
 1. Check/uncheck checkbox to `Automatically update deployment on push to branch`.
-    1. Branch creation/deletion and tag creation/deletion events will not trigger an update. Only pushes to an existing branch will trigger an update.
-    1. Pushes in quick succession to a branch will not trigger subsequent updates. In the future, this functionality may be changed/improved.
+1. Branch creation/deletion and tag creation/deletion events will not trigger an update. Only pushes to an existing branch will trigger an update.
+1. Pushes in quick succession to a branch will queue subsequent updates. Once a build completes, the most recent commit will begin building and the other queued builds will be skipped.
 
 ## Add or Remove GitHub Repositories
 

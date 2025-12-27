@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Annotated, Optional
+from typing import Annotated
 
 from langchain_community.retrievers import WikipediaRetriever
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -22,10 +22,10 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-fast_llm = ChatOpenAI(model="gpt-3.5-turbo")
+fast_llm = ChatOpenAI(model="gpt-4o-mini")
 # Uncomment for a Fireworks model
 # fast_llm = ChatFireworks(model="accounts/fireworks/models/firefunction-v1", max_tokens=32_000)
-long_context_llm = ChatOpenAI(model="gpt-4-turbo-preview")
+long_context_llm = ChatOpenAI(model="gpt-4o")
 
 
 direct_gen_outline_prompt = ChatPromptTemplate.from_messages(
@@ -51,7 +51,7 @@ class Subsection(BaseModel):
 class Section(BaseModel):
     section_title: str = Field(..., title="Title of the section")
     description: str = Field(..., title="Content of the section")
-    subsections: Optional[list[Subsection]] = Field(
+    subsections: list[Subsection] | None = Field(
         default=None,
         title="Titles and descriptions for each subsection of the Wikipedia page.",
     )
@@ -144,7 +144,7 @@ gen_perspectives_prompt = ChatPromptTemplate.from_messages(
 )
 
 gen_perspectives_chain = gen_perspectives_prompt | ChatOpenAI(
-    model="gpt-3.5-turbo"
+    model="gpt-4o-mini"
 ).with_structured_output(Perspectives)
 
 
@@ -201,8 +201,8 @@ def update_editor(editor, new_editor):
 
 class InterviewState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
-    references: Annotated[Optional[dict], update_references]
-    editor: Annotated[Optional[Editor], update_editor]
+    references: Annotated[dict | None, update_references]
+    editor: Annotated[Editor | None, update_editor]
 
 
 gen_qn_prompt = ChatPromptTemplate.from_messages(
@@ -270,7 +270,7 @@ gen_queries_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 gen_queries_chain = gen_queries_prompt | ChatOpenAI(
-    model="gpt-3.5-turbo"
+    model="gpt-4o-mini"
 ).with_structured_output(Queries, include_raw=True)
 
 
@@ -285,7 +285,7 @@ class AnswerWithCitations(BaseModel):
     @property
     def as_str(self) -> str:
         return f"{self.answer}\n\nCitations:\n\n" + "\n".join(
-            f"[{i+1}]: {url}" for i, url in enumerate(self.cited_urls)
+            f"[{i + 1}]: {url}" for i, url in enumerate(self.cited_urls)
         )
 
 
@@ -321,7 +321,7 @@ async def search_engine(query: str):
 
 async def gen_answer(
     state: InterviewState,
-    config: Optional[RunnableConfig] = None,
+    config: RunnableConfig | None = None,
     name: str = "Subject_Matter_Expert",
     max_str_len: int = 15000,
 ):
@@ -437,7 +437,7 @@ class SubSection(BaseModel):
 class WikiSection(BaseModel):
     section_title: str = Field(..., title="Title of the section")
     content: str = Field(..., title="Full content of the section")
-    subsections: Optional[list[Subsection]] = Field(
+    subsections: list[Subsection] | None = Field(
         default=None,
         title="Titles and descriptions for each subsection of the Wikipedia page.",
     )
@@ -553,7 +553,7 @@ async def conduct_interviews(state: ResearchState):
 def format_conversation(interview_state):
     messages = interview_state["messages"]
     convo = "\n".join(f"{m.name}: {m.content}" for m in messages)
-    return f'Conversation with {interview_state["editor"].name}\n\n' + convo
+    return f"Conversation with {interview_state['editor'].name}\n\n" + convo
 
 
 async def refine_outline(state: ResearchState):

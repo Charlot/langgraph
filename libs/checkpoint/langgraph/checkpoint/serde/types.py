@@ -1,4 +1,12 @@
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from collections.abc import Sequence
+from typing import (
+    Any,
+    Protocol,
+    TypeVar,
+    runtime_checkable,
+)
+
+from typing_extensions import Self
 
 ERROR = "__error__"
 SCHEDULED = "__scheduled__"
@@ -9,6 +17,25 @@ TASKS = "__pregel_tasks"
 Value = TypeVar("Value", covariant=True)
 Update = TypeVar("Update", contravariant=True)
 C = TypeVar("C")
+
+
+class ChannelProtocol(Protocol[Value, Update, C]):
+    # Mirrors langgraph.channels.base.BaseChannel
+    @property
+    def ValueType(self) -> Any: ...
+
+    @property
+    def UpdateType(self) -> Any: ...
+
+    def checkpoint(self) -> C | None: ...
+
+    def from_checkpoint(self, checkpoint: C | None) -> Self: ...
+
+    def update(self, values: Sequence[Update]) -> bool: ...
+
+    def get(self) -> Value: ...
+
+    def consume(self) -> bool: ...
 
 
 @runtime_checkable

@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import Field
 from datetime import datetime
 from typing import (
     Any,
+    ClassVar,
     Literal,
     NamedTuple,
-    Optional,
-    TypedDict,
+    Protocol,
+    TypeAlias,
+    Union,
 )
 
-Json = Optional[dict[str, Any]]
+from typing_extensions import TypedDict
+
+Json = dict[str, Any] | None
 """Represents a JSON-like structure, which can be None or a dictionary with string keys and any values."""
 
 RunStatus = Literal["pending", "running", "error", "success", "timeout", "interrupted"]
@@ -35,8 +40,24 @@ Represents the status of a thread:
 - "error": An exception occurred during task processing.
 """
 
+ThreadStreamMode = Literal["run_modes", "lifecycle", "state_update"]
+"""
+Defines the mode of streaming:
+- "run_modes": Stream the same events as the runs on thread, as well as run_done events.
+- "lifecycle": Stream only run start/end events.
+- "state_update": Stream state updates on the thread.
+"""
+
 StreamMode = Literal[
-    "values", "messages", "updates", "events", "debug", "custom", "messages-tuple"
+    "values",
+    "messages",
+    "updates",
+    "events",
+    "tasks",
+    "checkpoints",
+    "debug",
+    "custom",
+    "messages-tuple",
 ]
 """
 Defines the mode of streaming:
@@ -44,6 +65,8 @@ Defines the mode of streaming:
 - "messages": Stream complete messages.
 - "updates": Stream updates to the state.
 - "events": Stream events occurring during execution.
+- "checkpoints": Stream checkpoints as they are created.
+- "tasks": Stream task start and finish events.
 - "debug": Stream detailed debug information.
 - "custom": Stream custom events.
 """
@@ -78,6 +101,12 @@ Defines action after completion:
 - "keep": Retain resources after completion.
 """
 
+Durability = Literal["sync", "async", "exit"]
+"""Durability mode for the graph execution.
+- `"sync"`: Changes are persisted synchronously before the next step starts.
+- `"async"`: Changes are persisted asynchronously while the next step executes.
+- `"exit"`: Changes are persisted only when the graph exits."""
+
 All = Literal["*"]
 """Represents a wildcard or 'all' selector."""
 
@@ -107,6 +136,13 @@ ThreadSortBy = Literal["thread_id", "status", "created_at", "updated_at"]
 The field to sort by.
 """
 
+CronSortBy = Literal[
+    "cron_id", "assistant_id", "thread_id", "created_at", "updated_at", "next_run_date"
+]
+"""
+The field to sort by.
+"""
+
 SortOrder = Literal["asc", "desc"]
 """
 The order to sort by.
@@ -131,7 +167,7 @@ class Config(TypedDict, total=False):
     """
     Runtime values for attributes previously made configurable on this Runnable,
     or sub-Runnables, through .configurable_fields() or .configurable_alternatives().
-    Check .output_schema() for a description of the attributes that have been made 
+    Check .output_schema() for a description of the attributes that have been made
     configurable.
     """
 
@@ -166,6 +202,9 @@ class GraphSchema(TypedDict):
     config_schema: dict | None
     """The schema for the graph config.
     Missing if unable to generate JSON schema from graph."""
+    context_schema: dict | None
+    """The schema for the graph context.
+    Missing if unable to generate JSON schema from graph."""
 
 
 Subgraphs = dict[str, GraphSchema]
@@ -180,6 +219,8 @@ class AssistantBase(TypedDict):
     """The ID of the graph."""
     config: Config
     """The assistant config."""
+    context: Context
+    """The static context of the assistant."""
     created_at: datetime
     """The time the assistant was created."""
     metadata: Json
@@ -205,17 +246,22 @@ class Assistant(AssistantBase):
     """The last time the assistant was updated."""
 
 
-class Interrupt(TypedDict, total=False):
+class AssistantsSearchResponse(TypedDict):
+    """Paginated response for assistant search results."""
+
+    assistants: list[Assistant]
+    """The assistants returned for the current search page."""
+    next: str | None
+    """Pagination cursor from the ``X-Pagination-Next`` response header."""
+
+
+class Interrupt(TypedDict):
     """Represents an interruption in the execution flow."""
 
     value: Any
     """The value associated with the interrupt."""
-    when: Literal["during"]
-    """When the interrupt occurred."""
-    resumable: bool
-    """Whether the interrupt can be resumed."""
-    ns: list[str] | None
-    """Optional namespace for the interrupt."""
+    id: str
+    """The ID of the interrupt. Can be used to resume the interrupt."""
 
 
 class Thread(TypedDict):
@@ -234,7 +280,7 @@ class Thread(TypedDict):
     values: Json
     """The current state of the thread."""
     interrupts: dict[str, list[Interrupt]]
-    """Interrupts which were thrown in this thread"""
+    """Mapping of task ids to interrupts that were raised in that task."""
 
 
 class ThreadTask(TypedDict):
@@ -255,7 +301,7 @@ class ThreadState(TypedDict):
     values: list[dict] | dict[str, Any]
     """The state values."""
     next: Sequence[str]
-    """The next nodes to execute. If empty, the thread is done until new input is 
+    """The next nodes to execute. If empty, the thread is done until new input is
     received."""
     checkpoint: Checkpoint
     """The ID of the checkpoint."""
@@ -267,6 +313,8 @@ class ThreadState(TypedDict):
     """The ID of the parent checkpoint. If missing, this is the root checkpoint."""
     tasks: Sequence[ThreadTask]
     """Tasks to execute in this step. If already attempted, may contain an error."""
+    interrupts: list[Interrupt]
+    """Interrupts which were thrown in this thread."""
 
 
 class ThreadUpdateStateResponse(TypedDict):
@@ -302,6 +350,8 @@ class Cron(TypedDict):
 
     cron_id: str
     """The ID of the cron."""
+    assistant_id: str
+    """The ID of the assistant."""
     thread_id: str | None
     """The ID of the thread."""
     end_time: datetime | None
@@ -314,6 +364,79 @@ class Cron(TypedDict):
     """The last time the cron was updated."""
     payload: dict
     """The run payload to use for creating new run."""
+    user_id: str | None
+    """The user ID of the cron."""
+    next_run_date: datetime | None
+    """The next run date of the cron."""
+    metadata: dict
+    """The metadata of the cron."""
+
+
+# Select field aliases for client-side typing of `select` parameters.
+# These mirror the server's allowed field sets.
+
+AssistantSelectField = Literal[
+    "assistant_id",
+    "graph_id",
+    "name",
+    "description",
+    "config",
+    "context",
+    "created_at",
+    "updated_at",
+    "metadata",
+    "version",
+]
+
+ThreadSelectField = Literal[
+    "thread_id",
+    "created_at",
+    "updated_at",
+    "metadata",
+    "config",
+    "context",
+    "status",
+    "values",
+    "interrupts",
+]
+
+RunSelectField = Literal[
+    "run_id",
+    "thread_id",
+    "assistant_id",
+    "created_at",
+    "updated_at",
+    "status",
+    "metadata",
+    "kwargs",
+    "multitask_strategy",
+]
+
+CronSelectField = Literal[
+    "cron_id",
+    "assistant_id",
+    "thread_id",
+    "end_time",
+    "schedule",
+    "created_at",
+    "updated_at",
+    "user_id",
+    "payload",
+    "next_run_date",
+    "metadata",
+    "now",
+    "on_run_completed",
+]
+
+PrimitiveData = str | int | float | bool | None
+
+QueryParamTypes = (
+    Mapping[str, PrimitiveData | Sequence[PrimitiveData]]
+    | list[tuple[str, PrimitiveData]]
+    | tuple[tuple[str, PrimitiveData], ...]
+    | str
+    | bytes
+)
 
 
 class RunCreate(TypedDict):
@@ -329,6 +452,8 @@ class RunCreate(TypedDict):
     """Additional metadata to associate with the run."""
     config: Config | None
     """Configuration options for the run."""
+    context: Context | None
+    """The static context of the run."""
     checkpoint_id: str | None
     """The identifier of a checkpoint to resume from."""
     interrupt_before: list[str] | None
@@ -351,7 +476,7 @@ class Item(TypedDict):
     """The namespace of the item. A namespace is analogous to a document's directory."""
     key: str
     """The unique identifier of the item within its namespace.
-    
+
     In general, keys needn't be globally unique.
     """
     value: dict[str, Any]
@@ -394,6 +519,8 @@ class StreamPart(NamedTuple):
     """The type of event for this stream part."""
     data: dict
     """The data payload associated with the event."""
+    id: str | None = None
+    """The ID of the event."""
 
 
 class Send(TypedDict):
@@ -446,3 +573,54 @@ class RunCreateMetadata(TypedDict):
 
     thread_id: str | None
     """The ID of the thread."""
+
+
+class _TypedDictLikeV1(Protocol):
+    """Protocol to represent types that behave like TypedDicts
+
+    Version 1: using `ClassVar` for keys."""
+
+    __required_keys__: ClassVar[frozenset[str]]
+    __optional_keys__: ClassVar[frozenset[str]]
+
+
+class _TypedDictLikeV2(Protocol):
+    """Protocol to represent types that behave like TypedDicts
+
+    Version 2: not using `ClassVar` for keys."""
+
+    __required_keys__: frozenset[str]
+    __optional_keys__: frozenset[str]
+
+
+class _DataclassLike(Protocol):
+    """Protocol to represent types that behave like dataclasses.
+
+    Inspired by the private _DataclassT from dataclasses that uses a similar protocol as a bound.
+    """
+
+    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
+
+
+class _BaseModelLike(Protocol):
+    """Protocol to represent types that behave like Pydantic `BaseModel`."""
+
+    model_config: ClassVar[dict[str, Any]]
+    __pydantic_core_schema__: ClassVar[Any]
+
+    def model_dump(
+        self,
+        **kwargs: Any,
+    ) -> dict[str, Any]: ...
+
+
+_JSONLike: TypeAlias = None | str | int | float | bool
+_JSONMap: TypeAlias = Mapping[
+    str, Union[_JSONLike, list[_JSONLike], "_JSONMap", list["_JSONMap"]]
+]
+
+Input: TypeAlias = (
+    _TypedDictLikeV1 | _TypedDictLikeV2 | _DataclassLike | _BaseModelLike | _JSONMap
+)
+
+Context: TypeAlias = Input

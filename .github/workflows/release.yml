@@ -8,12 +8,14 @@ on:
         type: string
         default: "libs/langgraph"
 
+permissions:
+  contents: read
+
 env:
   PYTHON_VERSION: "3.11"
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     outputs:
@@ -23,10 +25,10 @@ jobs:
       tag: ${{ steps.check-version.outputs.tag }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -48,7 +50,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
       - name: Upload build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: dist
           path: ${{ inputs.working-directory }}/dist/
@@ -59,7 +61,13 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         run: |
           PKG_NAME=$(grep -m 1 "^name = " pyproject.toml | cut -d '"' -f 2)
-          VERSION=$(grep -m 1 "^version = " pyproject.toml | cut -d '"' -f 2)
+          if grep -q 'dynamic.*=.*\[.*"version".*\]' pyproject.toml; then
+            # handle dynamic versioning
+            DIR_NAME=$(echo "$PKG_NAME" | tr '-' '_')
+            VERSION=$(grep -m 1 '^__version__' "${DIR_NAME}/__init__.py" | cut -d '"' -f 2)
+          else
+            VERSION=$(grep -m 1 "^version = " pyproject.toml | cut -d '"' -f 2)
+          fi
           SHORT_PKG_NAME="$(echo "$PKG_NAME" | sed -e 's/langgraph//g' -e 's/-//g')"
           if [ -z $SHORT_PKG_NAME ]; then
             TAG="$VERSION"
@@ -78,7 +86,7 @@ jobs:
     outputs:
       release-body: ${{ steps.generate-release-body.outputs.release-body }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: langchain-ai/langgraph
           path: langgraph
@@ -134,7 +142,9 @@ jobs:
     needs:
       - build
       - release-notes
-    permissions: write-all
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/_test_release.yml
     with:
       working-directory: ${{ inputs.working-directory }}
@@ -147,7 +157,7 @@ jobs:
       - test-pypi-publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # We explicitly *don't* set up caching here. This ensures our tests are
       # maximally sensitive to catching breakage.
@@ -163,7 +173,7 @@ jobs:
       #   used in the real world.
 
       - name: Set up Python
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -211,7 +221,7 @@ jobs:
           uv run python -c "import $IMPORT_NAME; print(dir($IMPORT_NAME))"
 
       - name: Import test dependencies
-        run: uv sync --group dev
+        run: uv sync --group test
         working-directory: ${{ inputs.working-directory }}
 
       # Overwrite the local version of the package with the test PyPI version.
@@ -250,16 +260,16 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-suffix: "release"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: dist
           path: ${{ inputs.working-directory }}/dist/
@@ -291,16 +301,16 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-suffix: "release"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: dist
           path: ${{ inputs.working-directory }}/dist/
@@ -312,5 +322,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           generateReleaseNotes: false
           tag: ${{needs.build.outputs.tag}}
+          name: ${{ needs.build.outputs.pkg-name }}==${{ needs.build.outputs.version }}
           body: ${{ needs.release-notes.outputs.release-body }}
           commit: ${{ github.sha }}

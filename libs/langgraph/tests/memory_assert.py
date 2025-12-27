@@ -2,11 +2,11 @@ import os
 import tempfile
 from collections import defaultdict
 from functools import partial
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
-
 from langgraph.checkpoint.base import (
+    BaseCheckpointSaver,
     ChannelVersions,
     Checkpoint,
     CheckpointMetadata,
@@ -14,6 +14,8 @@ from langgraph.checkpoint.base import (
     SerializerProtocol,
 )
 from langgraph.checkpoint.memory import InMemorySaver, PersistentDict
+
+from langgraph.constants import TASKS
 
 
 class NoopSerializer(SerializerProtocol):
@@ -24,14 +26,36 @@ class NoopSerializer(SerializerProtocol):
         return "type", obj
 
 
+class MemorySaverNeedsPendingSendsMigration(BaseCheckpointSaver):
+    def __init__(self) -> None:
+        self.saver = InMemorySaver()
+
+    def __getattribute__(self, name):
+        if name in ("saver", "__class__", "get_tuple"):
+            return object.__getattribute__(self, name)
+        return getattr(self.saver, name)
+
+    def get_tuple(self, config):
+        if tup := self.saver.get_tuple(config):
+            if tup.checkpoint["v"] == 4 and tup.checkpoint["channel_values"].get(TASKS):
+                tup.checkpoint["v"] = 3
+                tup.checkpoint["pending_sends"] = tup.checkpoint["channel_values"].pop(
+                    TASKS
+                )
+                tup.checkpoint["channel_versions"].pop(TASKS)
+                for seen in tup.checkpoint["versions_seen"].values():
+                    seen.pop(TASKS, None)
+        return tup
+
+
 class MemorySaverAssertImmutable(InMemorySaver):
     storage_for_copies: defaultdict[str, dict[str, dict[str, Checkpoint]]]
 
     def __init__(
         self,
         *,
-        serde: Optional[SerializerProtocol] = None,
-        put_sleep: Optional[float] = None,
+        serde: SerializerProtocol | None = None,
+        put_sleep: float | None = None,
     ) -> None:
         _, filename = tempfile.mkstemp()
         super().__init__(
@@ -70,7 +94,7 @@ class MemorySaverAssertImmutable(InMemorySaver):
 
 
 class MemorySaverNoPending(InMemorySaver):
-    def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         result = super().get_tuple(config)
         if result:
             return CheckpointTuple(result.config, result.checkpoint, result.metadata)

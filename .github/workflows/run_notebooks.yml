@@ -11,6 +11,9 @@ on:
   schedule:
     - cron: "0 13 * * *"
 
+permissions:
+  contents: read
+
 defaults:
   run:
     working-directory: docs
@@ -25,9 +28,9 @@ jobs:
           - "latest"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python + Poetry
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
           enable-cache: true

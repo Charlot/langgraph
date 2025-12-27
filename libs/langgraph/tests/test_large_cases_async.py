@@ -5,24 +5,24 @@ import sys
 from typing import (
     Annotated,
     Literal,
-    Optional,
-    Union,
     cast,
 )
 
 import pytest
-from langchain_core.messages import ToolCall
+from langchain_core.messages import AnyMessage, ToolCall
 from langchain_core.runnables import RunnableConfig, RunnablePick
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.prebuilt.chat_agent_executor import create_react_agent
+from langgraph.prebuilt.tool_node import ToolNode
 from pytest_mock import MockerFixture
 from typing_extensions import TypedDict
 
-from langgraph.channels.ephemeral_value import EphemeralValue
+from langgraph._internal._constants import PULL, PUSH
 from langgraph.channels.last_value import LastValue
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.constants import END, PULL, PUSH, START
+from langgraph.channels.untracked_value import UntrackedValue
+from langgraph.constants import END, START
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import StateGraph
-from langgraph.prebuilt.chat_agent_executor import create_react_agent
 from langgraph.pregel import NodeBuilder, Pregel
 from langgraph.types import PregelTask, Send, StateSnapshot, StreamWriter
 from tests.any_int import AnyInt
@@ -61,7 +61,7 @@ async def test_invoke_two_processes_in_out_interrupt(
     thread2 = {"configurable": {"thread_id": "2"}}
 
     # start execution, stop at inbox
-    assert await app.ainvoke(2, thread1, checkpoint_during=True) is None
+    assert await app.ainvoke(2, thread1, durability="async") is None
 
     # inbox == 3
     checkpoint = await async_checkpointer.aget(thread1)
@@ -69,10 +69,10 @@ async def test_invoke_two_processes_in_out_interrupt(
     assert checkpoint["channel_values"]["inbox"] == 3
 
     # resume execution, finish
-    assert await app.ainvoke(None, thread1, checkpoint_during=True) == 4
+    assert await app.ainvoke(None, thread1, durability="async") == 4
 
     # start execution again, stop at inbox
-    assert await app.ainvoke(20, thread1, checkpoint_during=True) is None
+    assert await app.ainvoke(20, thread1, durability="async") is None
 
     # inbox == 21
     checkpoint = await async_checkpointer.aget(thread1)
@@ -80,11 +80,11 @@ async def test_invoke_two_processes_in_out_interrupt(
     assert checkpoint["channel_values"]["inbox"] == 21
 
     # send a new value in, interrupting the previous execution
-    assert await app.ainvoke(3, thread1, checkpoint_during=True) is None
-    assert await app.ainvoke(None, thread1, checkpoint_during=True) == 5
+    assert await app.ainvoke(3, thread1, durability="async") is None
+    assert await app.ainvoke(None, thread1, durability="async") == 5
 
     # start execution again, stopping at inbox
-    assert await app.ainvoke(20, thread2, checkpoint_during=True) is None
+    assert await app.ainvoke(20, thread2, durability="async") is None
 
     # inbox == 21
     snapshot = await app.aget_state(thread2)
@@ -118,7 +118,6 @@ async def test_invoke_two_processes_in_out_interrupt(
                 "parents": {},
                 "source": "loop",
                 "step": 6,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[1].config,
@@ -139,7 +138,6 @@ async def test_invoke_two_processes_in_out_interrupt(
                 "parents": {},
                 "source": "loop",
                 "step": 5,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[2].config,
@@ -160,7 +158,6 @@ async def test_invoke_two_processes_in_out_interrupt(
                 "parents": {},
                 "source": "input",
                 "step": 4,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[3].config,
@@ -181,7 +178,6 @@ async def test_invoke_two_processes_in_out_interrupt(
                 "parents": {},
                 "source": "loop",
                 "step": 3,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[4].config,
@@ -202,7 +198,6 @@ async def test_invoke_two_processes_in_out_interrupt(
                 "parents": {},
                 "source": "input",
                 "step": 2,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[5].config,
@@ -223,7 +218,6 @@ async def test_invoke_two_processes_in_out_interrupt(
                 "parents": {},
                 "source": "loop",
                 "step": 1,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[6].config,
@@ -244,7 +238,6 @@ async def test_invoke_two_processes_in_out_interrupt(
                 "parents": {},
                 "source": "loop",
                 "step": 0,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[7].config,
@@ -265,7 +258,6 @@ async def test_invoke_two_processes_in_out_interrupt(
                 "parents": {},
                 "source": "input",
                 "step": -1,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=None,
@@ -307,7 +299,7 @@ async def test_fork_always_re_runs_nodes(
     assert [
         c
         async for c in graph.astream(
-            1, thread1, stream_mode=["values", "updates"], checkpoint_during=True
+            1, thread1, stream_mode=["values", "updates"], durability="async"
         )
     ] == [
         ("values", 1),
@@ -341,7 +333,6 @@ async def test_fork_always_re_runs_nodes(
                 "parents": {},
                 "source": "loop",
                 "step": 5,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[1].config,
@@ -362,7 +353,6 @@ async def test_fork_always_re_runs_nodes(
                 "parents": {},
                 "source": "loop",
                 "step": 4,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[2].config,
@@ -383,7 +373,6 @@ async def test_fork_always_re_runs_nodes(
                 "parents": {},
                 "source": "loop",
                 "step": 3,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[3].config,
@@ -404,7 +393,6 @@ async def test_fork_always_re_runs_nodes(
                 "parents": {},
                 "source": "loop",
                 "step": 2,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[4].config,
@@ -425,7 +413,6 @@ async def test_fork_always_re_runs_nodes(
                 "parents": {},
                 "source": "loop",
                 "step": 1,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[5].config,
@@ -446,7 +433,6 @@ async def test_fork_always_re_runs_nodes(
                 "parents": {},
                 "source": "loop",
                 "step": 0,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=history[6].config,
@@ -467,7 +453,6 @@ async def test_fork_always_re_runs_nodes(
                 "parents": {},
                 "source": "input",
                 "step": -1,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=None,
@@ -499,8 +484,8 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
     from langchain_core.tools import tool
 
     class AgentState(TypedDict):
-        input: Annotated[str, EphemeralValue]
-        agent_outcome: Optional[Union[AgentAction, AgentFinish]]
+        input: Annotated[str, UntrackedValue]
+        agent_outcome: AgentAction | AgentFinish | None
         intermediate_steps: Annotated[list[tuple[AgentAction, str]], operator.add]
 
     # Assemble the tools
@@ -522,7 +507,7 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
         ]
     )
 
-    def agent_parser(input: str) -> dict[str, Union[AgentAction, AgentFinish]]:
+    def agent_parser(input: str) -> dict[str, AgentAction | AgentFinish]:
         if input.startswith("finish"):
             _, answer = input.split(":")
             return {
@@ -574,6 +559,7 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
     app = workflow.compile()
 
     assert await app.ainvoke({"input": "what is weather in sf"}) == {
+        "input": "what is weather in sf",
         "intermediate_steps": [
             [
                 AgentAction(
@@ -696,7 +682,7 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
     assert [
         c
         async for c in app_w_interrupt.astream(
-            {"input": "what is weather in sf"}, config
+            {"input": "what is weather in sf"}, config, durability="exit"
         )
     ] == [
         {
@@ -734,7 +720,6 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
             "parents": {},
             "source": "loop",
             "step": 1,
-            "thread_id": "1",
         },
         parent_config=None,
         interrupts=(),
@@ -774,7 +759,6 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
             "parents": {},
             "source": "update",
             "step": 2,
-            "thread_id": "1",
         },
         parent_config=(
             [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
@@ -852,7 +836,6 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
             "parents": {},
             "source": "update",
             "step": 5,
-            "thread_id": "1",
         },
         parent_config=(
             [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
@@ -874,7 +857,7 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
     assert [
         c
         async for c in app_w_interrupt.astream(
-            {"input": "what is weather in sf"}, config
+            {"input": "what is weather in sf"}, config, durability="exit"
         )
     ] == [
         {
@@ -910,7 +893,6 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
             "parents": {},
             "source": "loop",
             "step": 1,
-            "thread_id": "2",
         },
         parent_config=None,
         interrupts=(),
@@ -950,7 +932,6 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
             "parents": {},
             "source": "update",
             "step": 2,
-            "thread_id": "2",
         },
         parent_config=[
             c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)
@@ -1026,7 +1007,6 @@ async def test_conditional_graph_state(async_checkpointer: BaseCheckpointSaver) 
             "parents": {},
             "source": "update",
             "step": 5,
-            "thread_id": "2",
         },
         parent_config=[
             c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)
@@ -1158,6 +1138,7 @@ async def test_prebuilt_tool_chat() -> None:
                         "type": "tool_call_chunk",
                     }
                 ],
+                chunk_position="last",
             ),
             {
                 "langgraph_step": 1,
@@ -1217,6 +1198,7 @@ async def test_prebuilt_tool_chat() -> None:
                         "type": "tool_call_chunk",
                     },
                 ],
+                chunk_position="last",
             ),
             {
                 "langgraph_step": 3,
@@ -1265,6 +1247,7 @@ async def test_prebuilt_tool_chat() -> None:
         (
             _AnyIdAIMessageChunk(
                 content="answer",
+                chunk_position="last",
             ),
             {
                 "langgraph_step": 5,
@@ -1593,7 +1576,9 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
     assert [
         c
         async for c in app_w_interrupt.astream(
-            {"messages": HumanMessage(content="what is weather in sf")}, config
+            {"messages": HumanMessage(content="what is weather in sf")},
+            config,
+            durability="exit",
         )
     ] == [
         {
@@ -1645,7 +1630,6 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
             "parents": {},
             "source": "loop",
             "step": 1,
-            "thread_id": "1",
         },
         parent_config=None,
         interrupts=(),
@@ -1683,7 +1667,6 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
             "parents": {},
             "source": "update",
             "step": 2,
-            "thread_id": "1",
         },
         parent_config=(
             [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
@@ -1776,7 +1759,6 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
             "parents": {},
             "source": "loop",
             "step": 4,
-            "thread_id": "1",
         },
         parent_config=(
             [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
@@ -1824,7 +1806,6 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
             "parents": {},
             "source": "update",
             "step": 5,
-            "thread_id": "1",
         },
         parent_config=(
             [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
@@ -1846,7 +1827,9 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
     assert [
         c
         async for c in app_w_interrupt.astream(
-            {"messages": HumanMessage(content="what is weather in sf")}, config
+            {"messages": HumanMessage(content="what is weather in sf")},
+            config,
+            durability="exit",
         )
     ] == [
         {
@@ -1892,7 +1875,6 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
             "parents": {},
             "source": "loop",
             "step": 1,
-            "thread_id": "2",
         },
         parent_config=None,
         interrupts=(),
@@ -1930,7 +1912,6 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
             "parents": {},
             "source": "update",
             "step": 2,
-            "thread_id": "2",
         },
         parent_config=(
             [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
@@ -2023,7 +2004,6 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
             "parents": {},
             "source": "loop",
             "step": 4,
-            "thread_id": "2",
         },
         parent_config=(
             [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
@@ -2071,7 +2051,411 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
             "parents": {},
             "source": "update",
             "step": 5,
-            "thread_id": "2",
+        },
+        parent_config=(
+            [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
+                -1
+            ].config
+        ),
+        interrupts=(),
+    )
+
+
+async def test_message_graph(async_checkpointer: BaseCheckpointSaver) -> None:
+    from langchain_core.language_models.fake_chat_models import (
+        FakeMessagesListChatModel,
+    )
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langchain_core.tools import tool
+
+    class FakeFunctionChatModel(FakeMessagesListChatModel):
+        def bind_functions(self, functions: list):
+            return self
+
+    @tool()
+    def search_api(query: str) -> str:
+        """Searches the API for the query."""
+        return f"result for {query}"
+
+    tools = [search_api]
+
+    model = FakeFunctionChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tool_call123",
+                        "name": "search_api",
+                        "args": {"query": "query"},
+                    }
+                ],
+                id="ai1",
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tool_call456",
+                        "name": "search_api",
+                        "args": {"query": "another"},
+                    }
+                ],
+                id="ai2",
+            ),
+            AIMessage(content="answer", id="ai3"),
+        ]
+    )
+
+    # Define the function that determines whether to continue or not
+    def should_continue(messages):
+        last_message = messages[-1]
+        # If there is no function call, then we finish
+        if not last_message.tool_calls:
+            return "end"
+        # Otherwise if there is, we continue
+        else:
+            return "continue"
+
+    # Define a new graph
+    workflow = StateGraph(state_schema=Annotated[list[AnyMessage], add_messages])  # type: ignore[arg-type]
+
+    # Define the two nodes we will cycle between
+    workflow.add_node("agent", model)
+    workflow.add_node("tools", ToolNode(tools))
+
+    # Set the entrypoint as `agent`
+    # This means that this node is the first one called
+    workflow.set_entry_point("agent")
+
+    # We now add a conditional edge
+    workflow.add_conditional_edges(
+        # First, we define the start node. We use `agent`.
+        # This means these are the edges taken after the `agent` node is called.
+        "agent",
+        # Next, we pass in the function that will determine which node is called next.
+        should_continue,
+        # Finally we pass in a mapping.
+        # The keys are strings, and the values are other nodes.
+        # END is a special node marking that the graph should finish.
+        # What will happen is we will call `should_continue`, and then the output of that
+        # will be matched against the keys in this mapping.
+        # Based on which one it matches, that node will then be called.
+        {
+            # If `tools`, then we call the tool node.
+            "continue": "tools",
+            # Otherwise we finish.
+            "end": END,
+        },
+    )
+
+    # We now add a normal edge from `tools` to `agent`.
+    # This means that after `tools` is called, `agent` node is called next.
+    workflow.add_edge("tools", "agent")
+
+    # Finally, we compile it!
+    # This compiles it into a LangChain Runnable,
+    # meaning you can use it as you would any other runnable
+    app = workflow.compile()
+
+    assert await app.ainvoke([HumanMessage(content="what is weather in sf")]) == [
+        _AnyIdHumanMessage(
+            content="what is weather in sf",
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "tool_call123",
+                    "name": "search_api",
+                    "args": {"query": "query"},
+                }
+            ],
+            id="ai1",  # respects ids passed in
+        ),
+        _AnyIdToolMessage(
+            content="result for query",
+            name="search_api",
+            tool_call_id="tool_call123",
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "tool_call456",
+                    "name": "search_api",
+                    "args": {"query": "another"},
+                }
+            ],
+            id="ai2",
+        ),
+        _AnyIdToolMessage(
+            content="result for another",
+            name="search_api",
+            tool_call_id="tool_call456",
+        ),
+        AIMessage(content="answer", id="ai3"),
+    ]
+
+    assert [
+        c async for c in app.astream([HumanMessage(content="what is weather in sf")])
+    ] == [
+        {
+            "agent": AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tool_call123",
+                        "name": "search_api",
+                        "args": {"query": "query"},
+                    }
+                ],
+                id="ai1",
+            )
+        },
+        {
+            "tools": [
+                _AnyIdToolMessage(
+                    content="result for query",
+                    name="search_api",
+                    tool_call_id="tool_call123",
+                )
+            ]
+        },
+        {
+            "agent": AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tool_call456",
+                        "name": "search_api",
+                        "args": {"query": "another"},
+                    }
+                ],
+                id="ai2",
+            )
+        },
+        {
+            "tools": [
+                _AnyIdToolMessage(
+                    content="result for another",
+                    name="search_api",
+                    tool_call_id="tool_call456",
+                )
+            ]
+        },
+        {"agent": AIMessage(content="answer", id="ai3")},
+    ]
+
+    app_w_interrupt = workflow.compile(
+        checkpointer=async_checkpointer,
+        interrupt_after=["agent"],
+    )
+    config = {"configurable": {"thread_id": "1"}}
+
+    assert [
+        c
+        async for c in app_w_interrupt.astream(
+            HumanMessage(content="what is weather in sf"),
+            config,
+            durability="exit",
+        )
+    ] == [
+        {
+            "agent": AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tool_call123",
+                        "name": "search_api",
+                        "args": {"query": "query"},
+                    }
+                ],
+                id="ai1",
+            )
+        },
+        {"__interrupt__": ()},
+    ]
+
+    tup = await app_w_interrupt.checkpointer.aget_tuple(config)
+    assert await app_w_interrupt.aget_state(config) == StateSnapshot(
+        values=[
+            _AnyIdHumanMessage(content="what is weather in sf"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tool_call123",
+                        "name": "search_api",
+                        "args": {"query": "query"},
+                    }
+                ],
+                id="ai1",
+            ),
+        ],
+        tasks=(PregelTask(AnyStr(), "tools", (PULL, "tools")),),
+        next=("tools",),
+        config=tup.config,
+        created_at=tup.checkpoint["ts"],
+        metadata={
+            "parents": {},
+            "source": "loop",
+            "step": 1,
+        },
+        parent_config=None,
+        interrupts=(),
+    )
+
+    # modify ai message
+    last_message = (await app_w_interrupt.aget_state(config)).values[-1]
+    last_message.tool_calls[0]["args"] = {"query": "a different query"}
+    await app_w_interrupt.aupdate_state(config, last_message)
+
+    # message was replaced instead of appended
+    tup = await app_w_interrupt.checkpointer.aget_tuple(config)
+    assert await app_w_interrupt.aget_state(config) == StateSnapshot(
+        values=[
+            _AnyIdHumanMessage(content="what is weather in sf"),
+            AIMessage(
+                content="",
+                id="ai1",
+                tool_calls=[
+                    {
+                        "id": "tool_call123",
+                        "name": "search_api",
+                        "args": {"query": "a different query"},
+                    }
+                ],
+            ),
+        ],
+        tasks=(PregelTask(AnyStr(), "tools", (PULL, "tools")),),
+        next=("tools",),
+        config=tup.config,
+        created_at=tup.checkpoint["ts"],
+        metadata={
+            "parents": {},
+            "source": "update",
+            "step": 2,
+        },
+        parent_config=(
+            [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
+                -1
+            ].config
+        ),
+        interrupts=(),
+    )
+
+    assert [c async for c in app_w_interrupt.astream(None, config)] == [
+        {
+            "tools": [
+                _AnyIdToolMessage(
+                    content="result for a different query",
+                    name="search_api",
+                    tool_call_id="tool_call123",
+                )
+            ]
+        },
+        {
+            "agent": AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tool_call456",
+                        "name": "search_api",
+                        "args": {"query": "another"},
+                    }
+                ],
+                id="ai2",
+            )
+        },
+        {"__interrupt__": ()},
+    ]
+
+    tup = await app_w_interrupt.checkpointer.aget_tuple(config)
+    assert await app_w_interrupt.aget_state(config) == StateSnapshot(
+        values=[
+            _AnyIdHumanMessage(content="what is weather in sf"),
+            AIMessage(
+                content="",
+                id="ai1",
+                tool_calls=[
+                    {
+                        "id": "tool_call123",
+                        "name": "search_api",
+                        "args": {"query": "a different query"},
+                    }
+                ],
+            ),
+            _AnyIdToolMessage(
+                content="result for a different query",
+                name="search_api",
+                tool_call_id="tool_call123",
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tool_call456",
+                        "name": "search_api",
+                        "args": {"query": "another"},
+                    }
+                ],
+                id="ai2",
+            ),
+        ],
+        tasks=(PregelTask(AnyStr(), "tools", (PULL, "tools")),),
+        next=("tools",),
+        config=tup.config,
+        created_at=tup.checkpoint["ts"],
+        metadata={
+            "parents": {},
+            "source": "loop",
+            "step": 4,
+        },
+        parent_config=(
+            [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
+                -1
+            ].config
+        ),
+        interrupts=(),
+    )
+
+    await app_w_interrupt.aupdate_state(
+        config,
+        AIMessage(content="answer", id="ai2"),
+    )
+
+    # replaces message even if object identity is different, as long as id is the same
+    tup = await app_w_interrupt.checkpointer.aget_tuple(config)
+    assert await app_w_interrupt.aget_state(config) == StateSnapshot(
+        values=[
+            _AnyIdHumanMessage(content="what is weather in sf"),
+            AIMessage(
+                content="",
+                id="ai1",
+                tool_calls=[
+                    {
+                        "id": "tool_call123",
+                        "name": "search_api",
+                        "args": {"query": "a different query"},
+                    }
+                ],
+            ),
+            _AnyIdToolMessage(
+                content="result for a different query",
+                name="search_api",
+                tool_call_id="tool_call123",
+            ),
+            AIMessage(content="answer", id="ai2"),
+        ],
+        tasks=(),
+        next=(),
+        config=tup.config,
+        created_at=tup.checkpoint["ts"],
+        metadata={
+            "parents": {},
+            "source": "update",
+            "step": 5,
         },
         parent_config=(
             [c async for c in app_w_interrupt.checkpointer.alist(config, limit=2)][
@@ -2083,6 +2467,9 @@ async def test_state_graph_packets(async_checkpointer: BaseCheckpointSaver) -> N
 
 
 async def test_in_one_fan_out_out_one_graph_state() -> None:
+    def sorted_add(x: list[str], y: list[str]) -> list[str]:
+        return sorted(operator.add(x, y))
+
     class State(TypedDict, total=False):
         query: str
         answer: str
@@ -2181,7 +2568,9 @@ async def test_in_one_fan_out_out_one_graph_state() -> None:
                 "payload": {
                     "id": AnyStr(),
                     "name": "rewrite_query",
-                    "result": [("query", "query: what is weather in sf")],
+                    "result": {
+                        "query": "query: what is weather in sf",
+                    },
                     "error": None,
                     "interrupts": [],
                 },
@@ -2229,7 +2618,9 @@ async def test_in_one_fan_out_out_one_graph_state() -> None:
                 "payload": {
                     "id": AnyStr(),
                     "name": "retriever_two",
-                    "result": [("docs", ["doc3", "doc4"])],
+                    "result": {
+                        "docs": ["doc3", "doc4"],
+                    },
                     "error": None,
                     "interrupts": [],
                 },
@@ -2248,7 +2639,9 @@ async def test_in_one_fan_out_out_one_graph_state() -> None:
                 "payload": {
                     "id": AnyStr(),
                     "name": "retriever_one",
-                    "result": [("docs", ["doc1", "doc2"])],
+                    "result": {
+                        "docs": ["doc1", "doc2"],
+                    },
                     "error": None,
                     "interrupts": [],
                 },
@@ -2288,7 +2681,9 @@ async def test_in_one_fan_out_out_one_graph_state() -> None:
                 "payload": {
                     "id": AnyStr(),
                     "name": "qa",
-                    "result": [("answer", "doc1,doc2,doc3,doc4")],
+                    "result": {
+                        "answer": "doc1,doc2,doc3,doc4",
+                    },
                     "error": None,
                     "interrupts": [],
                 },
@@ -2354,7 +2749,7 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
     app = graph.compile(checkpointer=async_checkpointer)
 
     config = {"configurable": {"thread_id": "1"}}
-    await app.ainvoke({"my_key": "my value"}, config, debug=True)
+    await app.ainvoke({"my_key": "my value"}, config, durability="exit")
     # test state w/ nested subgraph state (right after interrupt)
     # first get_state without subgraph state
     expected = StateSnapshot(
@@ -2379,7 +2774,6 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
             "parents": {},
             "source": "loop",
             "step": 1,
-            "thread_id": "1",
         },
         created_at=AnyStr(),
         parent_config=None,
@@ -2423,12 +2817,6 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
                         },
                         "source": "loop",
                         "step": 1,
-                        "thread_id": "1",
-                        "langgraph_node": "inner",
-                        "langgraph_path": [PULL, "inner"],
-                        "langgraph_step": 2,
-                        "langgraph_triggers": ["branch:to:inner"],
-                        "langgraph_checkpoint_ns": AnyStr("inner:"),
                     },
                     created_at=AnyStr(),
                     parent_config=None,
@@ -2448,7 +2836,6 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
             "parents": {},
             "source": "loop",
             "step": 1,
-            "thread_id": "1",
         },
         created_at=AnyStr(),
         parent_config=None,
@@ -2482,12 +2869,6 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
                 "source": "loop",
                 "step": 1,
                 "parents": {"": AnyStr()},
-                "thread_id": "1",
-                "langgraph_node": "inner",
-                "langgraph_path": [PULL, "inner"],
-                "langgraph_step": 2,
-                "langgraph_triggers": ["branch:to:inner"],
-                "langgraph_checkpoint_ns": AnyStr("inner:"),
             },
             created_at=AnyStr(),
             parent_config=None,
@@ -2499,7 +2880,7 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
     assert child_history == expected_child_history
 
     # resume
-    await app.ainvoke(None, config, debug=True)
+    await app.ainvoke(None, config, durability="exit")
     # test state w/ nested subgraph state (after resuming from interrupt)
     assert await app.aget_state(config) == StateSnapshot(
         values={"my_key": "hi my value here and there and back again"},
@@ -2516,7 +2897,6 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
             "parents": {},
             "source": "loop",
             "step": 3,
-            "thread_id": "1",
         },
         created_at=AnyStr(),
         parent_config=(
@@ -2548,7 +2928,6 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
                 "parents": {},
                 "source": "loop",
                 "step": 3,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=(
@@ -2590,7 +2969,6 @@ async def test_nested_graph_state(async_checkpointer: BaseCheckpointSaver) -> No
                 "parents": {},
                 "source": "loop",
                 "step": 1,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=None,
@@ -2659,7 +3037,10 @@ async def test_doubly_nested_graph_state(
     # test invoke w/ nested interrupt
     config = {"configurable": {"thread_id": "1"}}
     assert [
-        c async for c in app.astream({"my_key": "my value"}, config, subgraphs=True)
+        c
+        async for c in app.astream(
+            {"my_key": "my value"}, config, subgraphs=True, durability="exit"
+        )
     ] == [
         ((), {"parent_1": {"my_key": "hi my value"}}),
         (
@@ -2697,7 +3078,6 @@ async def test_doubly_nested_graph_state(
             "parents": {},
             "source": "loop",
             "step": 1,
-            "thread_id": "1",
         },
         created_at=AnyStr(),
         parent_config=None,
@@ -2734,15 +3114,9 @@ async def test_doubly_nested_graph_state(
             }
         },
         metadata={
-            "langgraph_checkpoint_ns": AnyStr("child:"),
-            "langgraph_node": "child",
-            "langgraph_path": ["__pregel_pull", "child"],
-            "langgraph_step": 2,
-            "langgraph_triggers": ["branch:to:child"],
             "parents": {"": AnyStr()},
             "source": "loop",
             "step": 0,
-            "thread_id": "1",
         },
         created_at=AnyStr(),
         parent_config=None,
@@ -2782,14 +3156,6 @@ async def test_doubly_nested_graph_state(
             ),
             "source": "loop",
             "step": 1,
-            "thread_id": "1",
-            "langgraph_checkpoint_ns": AnyStr("child:"),
-            "langgraph_node": "child_1",
-            "langgraph_path": [PULL, AnyStr("child_1")],
-            "langgraph_step": 1,
-            "langgraph_triggers": [
-                "branch:to:child_1",
-            ],
         },
         created_at=AnyStr(),
         parent_config=None,
@@ -2845,17 +3211,6 @@ async def test_doubly_nested_graph_state(
                                     ),
                                     "source": "loop",
                                     "step": 1,
-                                    "thread_id": "1",
-                                    "langgraph_checkpoint_ns": AnyStr("child:"),
-                                    "langgraph_node": "child_1",
-                                    "langgraph_path": [
-                                        PULL,
-                                        AnyStr("child_1"),
-                                    ],
-                                    "langgraph_step": 1,
-                                    "langgraph_triggers": [
-                                        "branch:to:child_1",
-                                    ],
                                 },
                                 created_at=AnyStr(),
                                 parent_config=None,
@@ -2878,14 +3233,6 @@ async def test_doubly_nested_graph_state(
                         "parents": {"": AnyStr()},
                         "source": "loop",
                         "step": 0,
-                        "thread_id": "1",
-                        "langgraph_node": "child",
-                        "langgraph_path": [PULL, AnyStr("child")],
-                        "langgraph_step": 2,
-                        "langgraph_triggers": [
-                            "branch:to:child",
-                        ],
-                        "langgraph_checkpoint_ns": AnyStr("child:"),
                     },
                     created_at=AnyStr(),
                     parent_config=None,
@@ -2905,14 +3252,15 @@ async def test_doubly_nested_graph_state(
             "parents": {},
             "source": "loop",
             "step": 1,
-            "thread_id": "1",
         },
         created_at=AnyStr(),
         parent_config=None,
         interrupts=(),
     )
     # resume
-    assert [c async for c in app.astream(None, config, subgraphs=True)] == [
+    assert [
+        c async for c in app.astream(None, config, subgraphs=True, durability="exit")
+    ] == [
         (
             (AnyStr("child:"), AnyStr("child_1:")),
             {"grandchild_2": {"my_key": "hi my value here and there"}},
@@ -2943,7 +3291,6 @@ async def test_doubly_nested_graph_state(
                 "parents": {},
                 "source": "loop",
                 "step": 3,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=(
@@ -2977,7 +3324,6 @@ async def test_doubly_nested_graph_state(
                 "parents": {},
                 "source": "loop",
                 "step": 3,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config={
@@ -3016,7 +3362,6 @@ async def test_doubly_nested_graph_state(
                 "parents": {},
                 "source": "loop",
                 "step": 1,
-                "thread_id": "1",
             },
             created_at=AnyStr(),
             parent_config=None,
@@ -3028,44 +3373,6 @@ async def test_doubly_nested_graph_state(
         c async for c in app.aget_state_history(outer_history[1].tasks[0].state)
     ]
     assert child_history == [
-        StateSnapshot(
-            values={"my_key": "hi my value here and there"},
-            next=(),
-            config={
-                "configurable": {
-                    "thread_id": "1",
-                    "checkpoint_ns": AnyStr("child:"),
-                    "checkpoint_id": AnyStr(),
-                    "checkpoint_map": AnyDict(
-                        {"": AnyStr(), AnyStr("child:"): AnyStr()}
-                    ),
-                }
-            },
-            metadata={
-                "source": "loop",
-                "step": 1,
-                "parents": {"": AnyStr()},
-                "thread_id": "1",
-                "langgraph_node": "child",
-                "langgraph_path": [PULL, AnyStr("child")],
-                "langgraph_step": 2,
-                "langgraph_triggers": ["branch:to:child"],
-                "langgraph_checkpoint_ns": AnyStr("child:"),
-            },
-            created_at=AnyStr(),
-            parent_config={
-                "configurable": {
-                    "thread_id": "1",
-                    "checkpoint_ns": AnyStr("child:"),
-                    "checkpoint_id": AnyStr(),
-                    "checkpoint_map": AnyDict(
-                        {"": AnyStr(), AnyStr("child:"): AnyStr()}
-                    ),
-                }
-            },
-            tasks=(),
-            interrupts=(),
-        ),
         StateSnapshot(
             values={"my_key": "hi my value"},
             next=("child_1",),
@@ -3083,12 +3390,6 @@ async def test_doubly_nested_graph_state(
                 "source": "loop",
                 "step": 0,
                 "parents": {"": AnyStr()},
-                "thread_id": "1",
-                "langgraph_node": "child",
-                "langgraph_path": [PULL, AnyStr("child")],
-                "langgraph_step": 2,
-                "langgraph_triggers": ["branch:to:child"],
-                "langgraph_checkpoint_ns": AnyStr("child:"),
             },
             created_at=AnyStr(),
             parent_config=None,
@@ -3111,65 +3412,9 @@ async def test_doubly_nested_graph_state(
     ]
     # get grandchild graph history
     grandchild_history = [
-        c async for c in app.aget_state_history(child_history[1].tasks[0].state)
+        c async for c in app.aget_state_history(child_history[0].tasks[0].state)
     ]
     assert grandchild_history == [
-        StateSnapshot(
-            values={"my_key": "hi my value here and there"},
-            next=(),
-            config={
-                "configurable": {
-                    "thread_id": "1",
-                    "checkpoint_ns": AnyStr(),
-                    "checkpoint_id": AnyStr(),
-                    "checkpoint_map": AnyDict(
-                        {
-                            "": AnyStr(),
-                            AnyStr("child:"): AnyStr(),
-                            AnyStr(re.compile(r"child:.+|child1:")): AnyStr(),
-                        }
-                    ),
-                }
-            },
-            metadata={
-                "source": "loop",
-                "step": 2,
-                "parents": AnyDict(
-                    {
-                        "": AnyStr(),
-                        AnyStr("child:"): AnyStr(),
-                    }
-                ),
-                "thread_id": "1",
-                "langgraph_checkpoint_ns": AnyStr("child:"),
-                "langgraph_node": "child_1",
-                "langgraph_path": [
-                    PULL,
-                    AnyStr("child_1"),
-                ],
-                "langgraph_step": 1,
-                "langgraph_triggers": [
-                    "branch:to:child_1",
-                ],
-            },
-            created_at=AnyStr(),
-            parent_config={
-                "configurable": {
-                    "thread_id": "1",
-                    "checkpoint_ns": AnyStr(),
-                    "checkpoint_id": AnyStr(),
-                    "checkpoint_map": AnyDict(
-                        {
-                            "": AnyStr(),
-                            AnyStr("child:"): AnyStr(),
-                            AnyStr(re.compile(r"child:.+|child1:")): AnyStr(),
-                        }
-                    ),
-                }
-            },
-            tasks=(),
-            interrupts=(),
-        ),
         StateSnapshot(
             values={"my_key": "hi my value here"},
             next=("grandchild_2",),
@@ -3196,17 +3441,6 @@ async def test_doubly_nested_graph_state(
                         AnyStr("child:"): AnyStr(),
                     }
                 ),
-                "thread_id": "1",
-                "langgraph_checkpoint_ns": AnyStr("child:"),
-                "langgraph_node": "child_1",
-                "langgraph_path": [
-                    PULL,
-                    AnyStr("child_1"),
-                ],
-                "langgraph_step": 1,
-                "langgraph_triggers": [
-                    "branch:to:child_1",
-                ],
             },
             created_at=AnyStr(),
             parent_config=None,
@@ -3239,7 +3473,7 @@ async def test_send_to_nested_graphs(async_checkpointer: BaseCheckpointSaver) ->
         return {"subject": f"{subject} - hohoho"}
 
     # subgraph
-    subgraph = StateGraph(JokeState, output=OverallState)
+    subgraph = StateGraph(JokeState, output_schema=OverallState)
     subgraph.add_node("edit", edit)
     subgraph.add_node(
         "generate", lambda state: {"jokes": [f"Joke about {state['subject']}"]}
@@ -3430,7 +3664,11 @@ async def test_weather_subgraph(
     assert [
         c
         async for c in graph.astream(
-            inputs, config=config, stream_mode="updates", subgraphs=True
+            inputs,
+            config=config,
+            stream_mode="updates",
+            subgraphs=True,
+            durability="exit",
         )
     ] == [
         ((), {"router_node": {"route": "weather"}}),
@@ -3457,7 +3695,6 @@ async def test_weather_subgraph(
             "source": "loop",
             "step": 1,
             "parents": {},
-            "thread_id": "1",
         },
         created_at=AnyStr(),
         parent_config=None,
@@ -3516,7 +3753,11 @@ async def test_weather_subgraph(
     assert [
         c
         async for c in graph.astream(
-            inputs, config=config, stream_mode="updates", subgraphs=True
+            inputs,
+            config=config,
+            stream_mode="updates",
+            subgraphs=True,
+            durability="exit",
         )
     ] == [
         ((), {"router_node": {"route": "weather"}}),
@@ -3541,7 +3782,6 @@ async def test_weather_subgraph(
             "source": "loop",
             "step": 1,
             "parents": {},
-            "thread_id": "14",
         },
         created_at=AnyStr(),
         parent_config=None,
@@ -3575,12 +3815,6 @@ async def test_weather_subgraph(
                         "source": "loop",
                         "step": 1,
                         "parents": {"": AnyStr()},
-                        "thread_id": "14",
-                        "langgraph_node": "weather_graph",
-                        "langgraph_path": [PULL, "weather_graph"],
-                        "langgraph_step": 2,
-                        "langgraph_triggers": ["branch:to:weather_graph"],
-                        "langgraph_checkpoint_ns": AnyStr("weather_graph:"),
                     },
                     created_at=AnyStr(),
                     parent_config=None,
@@ -3620,7 +3854,6 @@ async def test_weather_subgraph(
             "source": "loop",
             "step": 1,
             "parents": {},
-            "thread_id": "14",
         },
         created_at=AnyStr(),
         parent_config=None,
@@ -3656,14 +3889,6 @@ async def test_weather_subgraph(
                         "step": 2,
                         "source": "update",
                         "parents": {"": AnyStr()},
-                        "thread_id": "14",
-                        "checkpoint_id": AnyStr(),
-                        "checkpoint_ns": AnyStr("weather_graph:"),
-                        "langgraph_node": "weather_graph",
-                        "langgraph_path": [PULL, "weather_graph"],
-                        "langgraph_step": 2,
-                        "langgraph_triggers": ["branch:to:weather_graph"],
-                        "langgraph_checkpoint_ns": AnyStr("weather_graph:"),
                     },
                     created_at=AnyStr(),
                     parent_config=(

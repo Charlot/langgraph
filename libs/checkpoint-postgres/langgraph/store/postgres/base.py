@@ -6,30 +6,20 @@ import json
 import logging
 import threading
 from collections import defaultdict
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Generic,
     Literal,
     NamedTuple,
     TypeVar,
-    Union,
     cast,
 )
 
 import orjson
-from psycopg import Capabilities, Connection, Cursor, Pipeline
-from psycopg.rows import DictRow, dict_row
-from psycopg.types.json import Jsonb
-from psycopg_pool import ConnectionPool
-from typing_extensions import TypedDict
-
-from langgraph.checkpoint.postgres import _ainternal as _ainternal
-from langgraph.checkpoint.postgres import _internal as _pg_internal
 from langgraph.store.base import (
     BaseStore,
     GetOp,
@@ -46,6 +36,14 @@ from langgraph.store.base import (
     get_text_at_path,
     tokenize_path,
 )
+from psycopg import Capabilities, Connection, Cursor, Pipeline
+from psycopg.rows import DictRow, dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
+from typing_extensions import TypedDict
+
+from langgraph.checkpoint.postgres import _ainternal as _ainternal
+from langgraph.checkpoint.postgres import _internal as _pg_internal
 
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
@@ -93,7 +91,12 @@ WHERE expires_at IS NOT NULL;
 VECTOR_MIGRATIONS: Sequence[Migration] = [
     Migration(
         """
-CREATE EXTENSION IF NOT EXISTS vector;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+        CREATE EXTENSION vector;
+    END IF;
+END $$;
 """,
     ),
     Migration(
@@ -141,7 +144,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS store_vectors_embedding_idx ON store_vec
 ]
 
 
-C = TypeVar("C", bound=Union[_pg_internal.Conn, _ainternal.Conn])
+C = TypeVar("C", bound=_pg_internal.Conn | _ainternal.Conn)
 
 
 class PoolConfig(TypedDict, total=False):
@@ -255,7 +258,7 @@ class BasePostgresStore(Generic[C]):
 
         results = []
         for namespace, items in namespace_groups.items():
-            _, keys = zip(*items)
+            _, keys = zip(*items, strict=False)
             this_refresh_ttls = refresh_ttls[namespace]
 
             query = """
@@ -324,31 +327,36 @@ class BasePostgresStore(Generic[C]):
         embedding_request: tuple[str, Sequence[tuple[str, str, str, str]]] | None = None
         if inserts:
             values = []
-            insertion_params = []
+            insertion_params: list[Any] = []
             vector_values = []
             embedding_request_params = []
             # Handle TTL expiration
 
             # First handle main store insertions
             for op in inserts:
-                if op.ttl is not None:
-                    expires_at_str = f"NOW() + INTERVAL '{op.ttl * 60} seconds'"
-                    ttl_minutes = op.ttl
-                else:
-                    expires_at_str = "NULL"
-                    ttl_minutes = None
-
-                values.append(
-                    f"(%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, {expires_at_str}, %s)"
-                )
                 insertion_params.extend(
-                    [
+                    (
                         _namespace_to_text(op.namespace),
                         op.key,
                         Jsonb(cast(dict, op.value)),
-                        ttl_minutes,
-                    ]
+                    )
                 )
+                if op.ttl is not None:
+                    values.append(
+                        "(%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NOW() + %s::interval, %s)"
+                    )
+                    ttl_minutes = float(op.ttl)
+                    insertion_params.extend(
+                        (
+                            f"{ttl_minutes * 60} seconds",
+                            ttl_minutes,
+                        )
+                    )
+                else:
+                    values.append(
+                        "(%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, %s)"
+                    )
+                    insertion_params.append(None)
 
             # Then handle embeddings if configured
             if self.index_config:
@@ -448,10 +456,8 @@ class BasePostgresStore(Generic[C]):
 
                 score_operator, post_operator = get_distance_operator(self)
                 post_operator = post_operator.replace("scored", "uniq")
-                vector_type = (
-                    cast(PostgresIndexConfig, self.index_config)
-                    .get("ann_index_config", {})
-                    .get("vector_type", "vector")
+                vector_type = self.index_config.get("ann_index_config", {}).get(
+                    "vector_type", "vector"
                 )
 
                 # For hamming bit vectors, or “regular” vectors
@@ -464,6 +470,10 @@ class BasePostgresStore(Generic[C]):
                         cast(dict, self.index_config)["dims"],
                     )
                 else:
+                    if vector_type not in ("vector", "halfvec"):
+                        raise ValueError(
+                            f"Invalid vector_type for pgvector: {vector_type}"
+                        )
                     score_operator = score_operator % ("%s", vector_type)
 
                 vectors_per_doc_estimate = cast(dict, self.index_config)[
@@ -559,7 +569,7 @@ class BasePostgresStore(Generic[C]):
     ) -> list[tuple[str, Sequence]]:
         queries: list[tuple[str, Sequence]] = []
         for _, op in list_ops:
-            query = """
+            query = r"""
                 SELECT DISTINCT ON (truncated_prefix) truncated_prefix, prefix
                 FROM (
                     SELECT
@@ -758,6 +768,7 @@ class PostgresStore(BaseStore, BasePostgresStore[_pg_internal.Conn]):
                 If provided, will create a connection pool and use it instead of a single connection.
                 This overrides the `pipeline` argument.
             index: The index configuration for the store.
+            ttl: The TTL configuration for the store.
 
         Returns:
             PostgresStore: A new PostgresStore instance.
@@ -869,7 +880,7 @@ class PostgresStore(BaseStore, BasePostgresStore[_pg_internal.Conn]):
 
         Args:
             timeout: Maximum time to wait for the thread to stop, in seconds.
-                If None, wait indefinitely.
+                If `None`, wait indefinitely.
 
         Returns:
             bool: True if the thread was successfully stopped or wasn't running,
@@ -1015,7 +1026,9 @@ class PostgresStore(BaseStore, BasePostgresStore[_pg_internal.Conn]):
                     query,
                     [
                         p
-                        for (ns, k, pathname, _), vector in zip(txt_params, vectors)
+                        for (ns, k, pathname, _), vector in zip(
+                            txt_params, vectors, strict=False
+                        )
                         for p in (ns, k, pathname, vector)
                     ],
                 )
@@ -1036,13 +1049,15 @@ class PostgresStore(BaseStore, BasePostgresStore[_pg_internal.Conn]):
             embeddings = self.embeddings.embed_documents(
                 [query for _, query in embedding_requests]
             )
-            for (idx, _), embedding in zip(embedding_requests, embeddings):
+            for (idx, _), embedding in zip(
+                embedding_requests, embeddings, strict=False
+            ):
                 _paramslist = queries[idx][1]
                 for i in range(len(_paramslist)):
                     if _paramslist[i] is PLACEHOLDER:
                         _paramslist[i] = embedding
 
-        for (idx, _), (query, params) in zip(search_ops, queries):
+        for (idx, _), (query, params) in zip(search_ops, queries, strict=False):
             cur.execute(query, params)
             rows = cast(list[Row], cur.fetchall())
             results[idx] = [
@@ -1059,7 +1074,7 @@ class PostgresStore(BaseStore, BasePostgresStore[_pg_internal.Conn]):
         cur: Cursor[DictRow],
     ) -> None:
         for (query, params), (idx, _) in zip(
-            self._get_batch_list_namespaces_queries(list_ops), list_ops
+            self._get_batch_list_namespaces_queries(list_ops), list_ops, strict=False
         ):
             cur.execute(query, params)
             results[idx] = [_decode_ns_bytes(row["truncated_prefix"]) for row in cur]
@@ -1116,6 +1131,27 @@ class PostgresStore(BaseStore, BasePostgresStore[_pg_internal.Conn]):
                             k: v(self) if v is not None and callable(v) else v
                             for k, v in migration.params.items()
                         }
+                        if "dims" in params:
+                            try:
+                                params["dims"] = int(params["dims"])
+                            except Exception as e:
+                                raise ValueError(
+                                    f"Invalid dims for vector index: {params['dims']}"
+                                ) from e
+                        if "vector_type" in params:
+                            vt = str(params["vector_type"])
+                            if vt not in ("vector", "halfvec"):
+                                raise ValueError(
+                                    f"Invalid vector_type for pgvector: {vt}"
+                                )
+                            params["vector_type"] = vt
+                        if "index_type" in params:
+                            it = str(params["index_type"])
+                            if it not in ("hnsw", "ivfflat"):
+                                raise ValueError(
+                                    f"Invalid index_type for pgvector: {it}"
+                                )
+                            params["index_type"] = it
                         sql = sql % params
                     cur.execute(sql)
                     cur.execute("INSERT INTO vector_migrations (v) VALUES (%s)", (v,))
@@ -1141,7 +1177,7 @@ def _get_vector_type_ops(store: BasePostgresStore) -> str:
     if not store.index_config:
         return "vector_cosine_ops"
 
-    config = cast(PostgresIndexConfig, store.index_config)
+    config = store.index_config
     index_config = config.get("ann_index_config", _DEFAULT_ANN_CONFIG).copy()
     vector_type = cast(str, index_config.get("vector_type", "vector"))
     if vector_type not in ("vector", "halfvec"):
@@ -1169,15 +1205,44 @@ def _get_vector_type_ops(store: BasePostgresStore) -> str:
 
 
 def _get_index_params(store: Any) -> tuple[str, dict[str, Any]]:
-    """Get the index type and configuration based on config."""
+    """Get a sanitized index type and configuration based on config.
+
+    Only allow known-safe kinds and integer parameters to avoid SQL injection
+    when constructing DDL strings for index creation.
+    """
     if not store.index_config:
         return "hnsw", {}
 
     config = cast(PostgresIndexConfig, store.index_config)
-    index_config = config.get("ann_index_config", _DEFAULT_ANN_CONFIG).copy()
-    kind = index_config.pop("kind", "hnsw")
-    index_config.pop("vector_type", None)
-    return kind, index_config
+    raw = config.get("ann_index_config", _DEFAULT_ANN_CONFIG).copy()
+
+    kind = str(raw.pop("kind", "hnsw"))
+    if kind not in ("hnsw", "ivfflat", "flat"):
+        raise ValueError(
+            f"Invalid index kind for pgvector: {kind}. Expected 'hnsw', 'ivfflat', or 'flat'."
+        )
+
+    raw.pop("vector_type", None)
+
+    if kind == "hnsw":
+        allowed_keys = {"m", "ef_construction"}
+    else:  # ivfflat/flat
+        allowed_keys = {"lists", "nlist"}
+
+    sanitized: dict[str, int] = {}
+    for k, v in list(raw.items()):
+        if k not in allowed_keys:
+            continue
+        key = "lists" if k == "nlist" else k
+        try:
+            ivalue = int(v)  # type: ignore[call-overload]
+        except Exception as e:
+            raise ValueError(f"Invalid index parameter value for {k}: {v}") from e
+        if ivalue <= 0:
+            continue
+        sanitized[key] = ivalue
+
+    return kind, sanitized
 
 
 def _namespace_to_text(
@@ -1317,12 +1382,12 @@ def _ensure_index_config(
     index_config = index_config.copy()
     tokenized: list[tuple[str, Literal["$"] | list[str]]] = []
     tot = 0
-    text_fields = index_config.get("fields") or ["$"]
-    if isinstance(text_fields, str):
-        text_fields = [text_fields]
-    if not isinstance(text_fields, list):
-        raise ValueError(f"Text fields must be a list or a string. Got {text_fields}")
-    for p in text_fields:
+    fields = index_config.get("fields") or ["$"]
+    if isinstance(fields, str):
+        fields = [fields]
+    if not isinstance(fields, list):
+        raise ValueError(f"Text fields must be a list or a string. Got {fields}")
+    for p in fields:
         if p == "$":
             tokenized.append((p, "$"))
             tot += 1

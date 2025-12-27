@@ -7,18 +7,19 @@ from uuid import uuid4
 
 import pytest
 from langchain_core.runnables import RunnableConfig
-from psycopg import Connection
-from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
-
 from langgraph.checkpoint.base import (
     EXCLUDED_METADATA_KEYS,
     Checkpoint,
     CheckpointMetadata,
+    create_checkpoint,
+    empty_checkpoint,
 )
-from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.serde.types import TASKS
-from tests.checkpoint_utils import create_checkpoint, empty_checkpoint
+from psycopg import Connection
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+
+from langgraph.checkpoint.postgres import PostgresSaver, ShallowPostgresSaver
 from tests.conftest import DEFAULT_POSTGRES_URI
 
 
@@ -98,9 +99,35 @@ def _base_saver():
 
 
 @contextmanager
+def _shallow_saver():
+    """Fixture for regular connection mode testing with a shallow checkpointer."""
+    database = f"test_{uuid4().hex[:16]}"
+    # create unique db
+    with Connection.connect(DEFAULT_POSTGRES_URI, autocommit=True) as conn:
+        conn.execute(f"CREATE DATABASE {database}")
+    try:
+        with Connection.connect(
+            DEFAULT_POSTGRES_URI + database,
+            autocommit=True,
+            prepare_threshold=0,
+            row_factory=dict_row,
+        ) as conn:
+            checkpointer = ShallowPostgresSaver(conn)
+            checkpointer.setup()
+            yield checkpointer
+    finally:
+        # drop unique db
+        with Connection.connect(DEFAULT_POSTGRES_URI, autocommit=True) as conn:
+            conn.execute(f"DROP DATABASE {database}")
+
+
+@contextmanager
 def _saver(name: str):
     if name == "base":
         with _base_saver() as saver:
+            yield saver
+    elif name == "shallow":
+        with _shallow_saver() as saver:
             yield saver
     elif name == "pool":
         with _pool_saver() as saver:
@@ -116,8 +143,7 @@ def test_data():
     config_1: RunnableConfig = {
         "configurable": {
             "thread_id": "thread-1",
-            # for backwards compatibility testing
-            "thread_ts": "1",
+            "checkpoint_id": "1",
             "checkpoint_ns": "",
         }
     }
@@ -143,13 +169,11 @@ def test_data():
     metadata_1: CheckpointMetadata = {
         "source": "input",
         "step": 2,
-        "writes": {},
         "score": 1,
     }
     metadata_2: CheckpointMetadata = {
         "source": "loop",
         "step": 1,
-        "writes": {"foo": "bar"},
         "score": None,
     }
     metadata_3: CheckpointMetadata = {}
@@ -161,7 +185,7 @@ def test_data():
     }
 
 
-@pytest.mark.parametrize("saver_name", ["base", "pool", "pipe"])
+@pytest.mark.parametrize("saver_name", ["base", "pool", "pipe", "shallow"])
 def test_combined_metadata(saver_name: str, test_data) -> None:
     with _saver(saver_name) as saver:
         config = {
@@ -176,19 +200,17 @@ def test_combined_metadata(saver_name: str, test_data) -> None:
         metadata: CheckpointMetadata = {
             "source": "loop",
             "step": 1,
-            "writes": {"foo": "bar"},
             "score": None,
         }
         saver.put(config, chkpnt, metadata, {})
         checkpoint = saver.get_tuple(config)
         assert checkpoint.metadata == {
             **metadata,
-            "thread_id": "thread-2",
             "run_id": "my_run_id",
         }
 
 
-@pytest.mark.parametrize("saver_name", ["base", "pool", "pipe"])
+@pytest.mark.parametrize("saver_name", ["base", "pool", "pipe", "shallow"])
 def test_search(saver_name: str, test_data) -> None:
     with _saver(saver_name) as saver:
         configs = test_data["configs"]
@@ -203,7 +225,6 @@ def test_search(saver_name: str, test_data) -> None:
         query_1 = {"source": "input"}  # search by 1 key
         query_2 = {
             "step": 1,
-            "writes": {"foo": "bar"},
         }  # search by multiple keys
         query_3: dict[str, Any] = {}  # search by no keys, return all checkpoints
         query_4 = {"source": "update", "step": 1}  # no match
@@ -237,7 +258,7 @@ def test_search(saver_name: str, test_data) -> None:
         } == {"", "inner"}
 
 
-@pytest.mark.parametrize("saver_name", ["base", "pool", "pipe"])
+@pytest.mark.parametrize("saver_name", ["base", "pool", "pipe", "shallow"])
 def test_null_chars(saver_name: str, test_data) -> None:
     with _saver(saver_name) as saver:
         config = saver.put(
@@ -307,3 +328,33 @@ def test_pending_sends_migration(saver_name: str) -> None:
             TASKS: ["send-1", "send-2", "send-3"]
         }
         assert TASKS in search_results[0].checkpoint["channel_versions"]
+
+
+@pytest.mark.parametrize("saver_name", ["base", "pool", "pipe"])
+def test_get_checkpoint_no_channel_values(
+    monkeypatch, saver_name: str, test_data
+) -> None:
+    """Backwards compatibility test that verifies a checkpoint with no channel_values key can be retrieved without throwing an error."""
+    with _saver(saver_name) as saver:
+        config = {
+            "configurable": {
+                "thread_id": "thread-2",
+                "checkpoint_ns": "",
+                "__super_private_key": "super_private_value",
+            },
+        }
+        chkpnt: Checkpoint = create_checkpoint(empty_checkpoint(), {}, 1)
+        saver.put(config, chkpnt, {}, {})
+
+        load_checkpoint_tuple = saver._load_checkpoint_tuple
+
+        def patched_load_checkpoint_tuple(value):
+            value["checkpoint"].pop("channel_values", None)
+            return load_checkpoint_tuple(value)
+
+        monkeypatch.setattr(
+            saver, "_load_checkpoint_tuple", patched_load_checkpoint_tuple
+        )
+
+        checkpoint = saver.get_tuple(config)
+        assert checkpoint.checkpoint["channel_values"] == {}

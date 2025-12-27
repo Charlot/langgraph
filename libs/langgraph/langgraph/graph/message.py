@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import uuid
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import (
     Annotated,
     Any,
-    Callable,
     Literal,
-    Union,
     cast,
 )
 
@@ -22,11 +20,20 @@ from langchain_core.messages import (
     convert_to_messages,
     message_chunk_to_message,
 )
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, deprecated
 
-from langgraph.constants import CONF, CONFIG_KEY_SEND
+from langgraph._internal._constants import CONF, CONFIG_KEY_SEND, NS_SEP
+from langgraph.graph.state import StateGraph
+from langgraph.warnings import LangGraphDeprecatedSinceV10
 
-Messages = Union[list[MessageLikeRepresentation], MessageLikeRepresentation]
+__all__ = (
+    "add_messages",
+    "MessagesState",
+    "MessageGraph",
+    "REMOVE_ALL_MESSAGES",
+)
+
+Messages = list[MessageLikeRepresentation] | MessageLikeRepresentation
 
 REMOVE_ALL_MESSAGES = "__remove_all__"
 
@@ -63,47 +70,52 @@ def add_messages(
     new message has the same ID as an existing message.
 
     Args:
-        left: The base list of messages.
-        right: The list of messages (or single message) to merge
+        left: The base list of `Messages`.
+        right: The list of `Messages` (or single `Message`) to merge
             into the base list.
-        format: The format to return messages in. If None then messages will be
-            returned as is. If 'langchain-openai' then messages will be returned as
-            BaseMessage objects with their contents formatted to match OpenAI message
-            format, meaning contents can be string, 'text' blocks, or 'image_url' blocks
-            and tool responses are returned as their own ToolMessages.
+        format: The format to return messages in. If `None` then `Messages` will be
+            returned as is. If `langchain-openai` then `Messages` will be returned as
+            `BaseMessage` objects with their contents formatted to match OpenAI message
+            format, meaning contents can be string, `'text'` blocks, or `'image_url'` blocks
+            and tool responses are returned as their own `ToolMessage` objects.
 
             !!! important "Requirement"
 
-                Must have ``langchain-core>=0.3.11`` installed to use this feature.
+                Must have `langchain-core>=0.3.11` installed to use this feature.
 
     Returns:
         A new list of messages with the messages from `right` merged into `left`.
         If a message in `right` has the same ID as a message in `left`, the
-        message from `right` will replace the message from `left`.
+            message from `right` will replace the message from `left`.
 
-    Example:
-        ```python title="Basic usage"
+    Example: Basic usage
+        ```python
         from langchain_core.messages import AIMessage, HumanMessage
+
         msgs1 = [HumanMessage(content="Hello", id="1")]
         msgs2 = [AIMessage(content="Hi there!", id="2")]
         add_messages(msgs1, msgs2)
         # [HumanMessage(content='Hello', id='1'), AIMessage(content='Hi there!', id='2')]
         ```
 
-        ```python title="Overwrite existing message"
+    Example: Overwrite existing message
+        ```python
         msgs1 = [HumanMessage(content="Hello", id="1")]
         msgs2 = [HumanMessage(content="Hello again", id="1")]
         add_messages(msgs1, msgs2)
         # [HumanMessage(content='Hello again', id='1')]
         ```
 
-        ```python title="Use in a StateGraph"
+    Example: Use in a StateGraph
+        ```python
         from typing import Annotated
         from typing_extensions import TypedDict
         from langgraph.graph import StateGraph
 
+
         class State(TypedDict):
             messages: Annotated[list, add_messages]
+
 
         builder = StateGraph(State)
         builder.add_node("chatbot", lambda state: {"messages": [("assistant", "Hello")]})
@@ -114,35 +126,41 @@ def add_messages(
         # {'messages': [AIMessage(content='Hello', id=...)]}
         ```
 
-        ```python title="Use OpenAI message format"
+    Example: Use OpenAI message format
+        ```python
         from typing import Annotated
         from typing_extensions import TypedDict
         from langgraph.graph import StateGraph, add_messages
 
+
         class State(TypedDict):
-            messages: Annotated[list, add_messages(format='langchain-openai')]
+            messages: Annotated[list, add_messages(format="langchain-openai")]
+
 
         def chatbot_node(state: State) -> list:
-            return {"messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Here's an image:",
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": "1234",
+            return {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Here's an image:",
+                                "cache_control": {"type": "ephemeral"},
                             },
-                        },
-                    ]
-                },
-            ]}
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": "1234",
+                                },
+                            },
+                        ],
+                    },
+                ]
+            }
+
 
         builder = StateGraph(State)
         builder.add_node("chatbot", chatbot_node)
@@ -226,6 +244,66 @@ def add_messages(
     return merged
 
 
+@deprecated(
+    "MessageGraph is deprecated in langgraph 1.0.0, to be removed in 2.0.0. Please use StateGraph with a `messages` key instead.",
+    category=None,
+)
+class MessageGraph(StateGraph):
+    """A StateGraph where every node receives a list of messages as input and returns one or more messages as output.
+
+    MessageGraph is a subclass of StateGraph whose entire state is a single, append-only* list of messages.
+    Each node in a MessageGraph takes a list of messages as input and returns zero or more
+    messages as output. The `add_messages` function is used to merge the output messages from each node
+    into the existing list of messages in the graph's state.
+
+    Examples:
+        ```pycon
+        >>> from langgraph.graph.message import MessageGraph
+        ...
+        >>> builder = MessageGraph()
+        >>> builder.add_node("chatbot", lambda state: [("assistant", "Hello!")])
+        >>> builder.set_entry_point("chatbot")
+        >>> builder.set_finish_point("chatbot")
+        >>> builder.compile().invoke([("user", "Hi there.")])
+        [HumanMessage(content="Hi there.", id='...'), AIMessage(content="Hello!", id='...')]
+        ```
+
+        ```pycon
+        >>> from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+        >>> from langgraph.graph.message import MessageGraph
+        ...
+        >>> builder = MessageGraph()
+        >>> builder.add_node(
+        ...     "chatbot",
+        ...     lambda state: [
+        ...         AIMessage(
+        ...             content="Hello!",
+        ...             tool_calls=[{"name": "search", "id": "123", "args": {"query": "X"}}],
+        ...         )
+        ...     ],
+        ... )
+        >>> builder.add_node(
+        ...     "search", lambda state: [ToolMessage(content="Searching...", tool_call_id="123")]
+        ... )
+        >>> builder.set_entry_point("chatbot")
+        >>> builder.add_edge("chatbot", "search")
+        >>> builder.set_finish_point("search")
+        >>> builder.compile().invoke([HumanMessage(content="Hi there. Can you search for X?")])
+        {'messages': [HumanMessage(content="Hi there. Can you search for X?", id='b8b7d8f4-7f4d-4f4d-9c1d-f8b8d8f4d9c1'),
+                     AIMessage(content="Hello!", id='f4d9c1d8-8d8f-4d9c-b8b7-d8f4f4d9c1d8'),
+                     ToolMessage(content="Searching...", id='d8f4f4d9-c1d8-4f4d-b8b7-d8f4f4d9c1d8', tool_call_id="123")]}
+        ```
+    """
+
+    def __init__(self) -> None:
+        warnings.warn(
+            "MessageGraph is deprecated in LangGraph v1.0.0, to be removed in v2.0.0. Please use StateGraph with a `messages` key instead.",
+            category=LangGraphDeprecatedSinceV10,
+            stacklevel=2,
+        )
+        super().__init__(Annotated[list[AnyMessage], add_messages])  # type: ignore[arg-type]
+
+
 class MessagesState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
 
@@ -262,8 +340,7 @@ def push_message(
     )
 
     from langgraph.config import get_config
-    from langgraph.constants import NS_SEP
-    from langgraph.pregel.messages import StreamMessagesHandler
+    from langgraph.pregel._messages import StreamMessagesHandler
 
     config = get_config()
     message = next(x for x in convert_to_messages([message]))
